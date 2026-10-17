@@ -1,0 +1,18 @@
+# deck-virtual-controller-client (runs on the Steam Deck)
+
+# "hidraw" reads the Deck hardware directly (works in Game Mode with any Steam
+# layout); "evdev" reads a Linux gamepad device instead.
+source = "hidraw"
+
+# Address of the PC running deck-virtual-controller-server.
+server_addr = "192.168.86.212:24800"
+
+# evdev path (/dev/input/eventN) or exact device name. Empty = auto-detect
+# (prefers Steam Input's "Microsoft X-Box 360 pad", then the raw Deck controller).
+device = ""
+
+# How often the state is re-sent even when nothing changes.
+heartbeat_ms = 100
+
+# Stick deadzone in raw units (sticks span -32768..32767).
+deadzone = 0

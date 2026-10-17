@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Deck Virtual Controller
+Comment=Use this Steam Deck as a PC controller
+Exec=%h/.local/bin/deck-controller-app
+Icon=input-gaming
+Terminal=false
+Categories=Game;

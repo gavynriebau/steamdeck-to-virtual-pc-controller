@@ -1,0 +1,9 @@
+[Unit]
+Description=Steam Deck virtual controller server
+
+[Service]
+ExecStart=%h/.local/bin/deck-virtual-controller-server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

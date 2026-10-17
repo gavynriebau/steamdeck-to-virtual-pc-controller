@@ -1,0 +1,13 @@
+# deck-virtual-controller-server (runs on the PC)
+
+# UDP address to listen on.
+bind_addr = "0.0.0.0:24800"
+
+# Release all inputs if the Deck goes silent for this long.
+timeout_ms = 1000
+
+# Name of the virtual gamepad that appears on the PC.
+name = "Steam Deck Virtual Controller"
+
+# Type of virtual pad: "xbox" (Xbox 360 controller) or "steam" (Valve Steam Controller).
+controller_type = "steam"
