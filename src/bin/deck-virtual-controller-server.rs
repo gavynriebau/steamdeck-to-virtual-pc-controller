@@ -6,7 +6,7 @@ use std::net::UdpSocket;
 use std::time::Duration;
 use steamdeck_as_pc_controller::config::Validate;
 use steamdeck_as_pc_controller::proto;
-use steamdeck_as_pc_controller::serve::{Event, serve_once};
+use steamdeck_as_pc_controller::serve::{Acker, Event, serve_once};
 use steamdeck_as_pc_controller::session::Session;
 use steamdeck_as_pc_controller::sink::Sink;
 use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
@@ -92,8 +92,9 @@ fn main() {
     );
 
     let mut session = Session::new();
+    let mut acker = Acker::new(Duration::from_millis(250));
     loop {
-        match serve_once(&sock, &mut session, sink.as_mut()) {
+        match serve_once(&sock, &mut session, sink.as_mut(), &mut acker) {
             Event::Connected(from) => eprintln!("client connected: {from}"),
             Event::Rejected { from, reason } => {
                 eprintln!("ignoring packets from {from}: {reason}")

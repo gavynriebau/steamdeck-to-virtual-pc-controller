@@ -7,7 +7,7 @@ use std::time::Duration;
 use steamdeck_as_pc_controller::config::Validate;
 use steamdeck_as_pc_controller::publisher::{Publisher, RunEnd, run};
 use steamdeck_as_pc_controller::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::{deck_hid, evdev_source, proto};
+use steamdeck_as_pc_controller::{deck_hid, evdev_source, link, proto};
 
 const APP: &str = "deck-virtual-controller-client";
 
@@ -71,6 +71,17 @@ fn main() {
         )
     });
     eprintln!("sending to {}", cfg.server_addr);
+
+    match sock.try_clone() {
+        Ok(listener) => link::spawn_monitor(listener, Duration::from_secs(3), |reachable| {
+            if reachable {
+                eprintln!("server reachable");
+            } else {
+                eprintln!("no reply from the server (check server_addr and the PC's firewall)");
+            }
+        }),
+        Err(e) => eprintln!("cannot watch for server replies: {e}"),
+    }
 
     let (tx, rx) = std::sync::mpsc::channel();
     match cfg.source {

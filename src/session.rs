@@ -10,7 +10,11 @@ use std::net::SocketAddr;
 #[derive(Debug, PartialEq)]
 pub enum Accept {
     /// Apply this state. `new_client` is true for the first packet from a sender.
-    State { state: State, new_client: bool },
+    State {
+        state: State,
+        new_client: bool,
+        seq: u32,
+    },
     /// A late or duplicate packet from the current client: ignore it.
     Stale,
     /// Not usable. `first` is true the first time this sender sends this kind of
@@ -54,6 +58,7 @@ impl Session {
         Accept::State {
             state: packet.state,
             new_client,
+            seq: packet.seq,
         }
     }
 
@@ -81,7 +86,9 @@ mod tests {
 
     fn state_of(a: Accept) -> (State, bool) {
         match a {
-            Accept::State { state, new_client } => (state, new_client),
+            Accept::State {
+                state, new_client, ..
+            } => (state, new_client),
             other => panic!("expected State, got {other:?}"),
         }
     }

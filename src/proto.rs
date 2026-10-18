@@ -1,10 +1,122 @@
-//! Wire format: a fixed 50-byte UDP datagram carrying the full controller state.
+//! Wire format. The Deck sends a datagram with the full controller state on
+//! every change and as a heartbeat; the server answers with a small ack now and
+//! then so the Deck can tell it is being heard.
+//!
+//! The field order is written down once, in [`visit_fields`]; encoding,
+//! decoding and the packet length all follow from it.
 
 use crate::controller::State;
 
 pub const MAGIC: [u8; 4] = *b"DVC2";
-pub const PACKET_LEN: usize = 50;
+pub const ACK_MAGIC: [u8; 4] = *b"DVA2";
 pub const DEFAULT_PORT: u16 = 24800;
+/// A buffer this big holds any datagram of this protocol.
+pub const MAX_DATAGRAM: usize = 64;
+
+/// A visitor over the numeric fields of a packet, in wire order. Each method
+/// reads or writes the values it is handed, depending on the implementation.
+trait Fields {
+    fn u32(&mut self, v: &mut u32);
+    fn i16s(&mut self, v: &mut [i16]);
+    fn u16s(&mut self, v: &mut [u16]);
+    fn i8s(&mut self, v: &mut [i8]);
+}
+
+/// THE wire layout, after the 4-byte magic. Add a field here and encode,
+/// decode and [`packet_len`] all pick it up.
+fn visit_fields(f: &mut impl Fields, seq: &mut u32, state: &mut State) {
+    f.u32(seq);
+    let mut buttons = state.button_bits();
+    f.u32(&mut buttons);
+    state.set_button_bits(buttons);
+    f.i16s(&mut state.axes);
+    f.i8s(&mut state.hat);
+    f.i16s(&mut state.pads);
+    f.u16s(&mut state.pad_pressure);
+    f.i16s(&mut state.accel);
+    f.i16s(&mut state.gyro);
+}
+
+struct Writer(Vec<u8>);
+
+impl Fields for Writer {
+    fn u32(&mut self, v: &mut u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn i16s(&mut self, v: &mut [i16]) {
+        v.iter()
+            .for_each(|x| self.0.extend_from_slice(&x.to_le_bytes()));
+    }
+    fn u16s(&mut self, v: &mut [u16]) {
+        v.iter()
+            .for_each(|x| self.0.extend_from_slice(&x.to_le_bytes()));
+    }
+    fn i8s(&mut self, v: &mut [i8]) {
+        v.iter()
+            .for_each(|x| self.0.extend_from_slice(&x.to_le_bytes()));
+    }
+}
+
+/// Reads values from `bytes`. The caller checks the length first, so running
+/// out cannot happen; missing bytes would read as zero.
+struct Reader<'a> {
+    bytes: &'a [u8],
+}
+
+impl Reader<'_> {
+    fn take<const N: usize>(&mut self) -> [u8; N] {
+        match self.bytes.split_first_chunk::<N>() {
+            Some((head, rest)) => {
+                self.bytes = rest;
+                *head
+            }
+            None => [0; N],
+        }
+    }
+}
+
+impl Fields for Reader<'_> {
+    fn u32(&mut self, v: &mut u32) {
+        *v = u32::from_le_bytes(self.take());
+    }
+    fn i16s(&mut self, v: &mut [i16]) {
+        v.iter_mut()
+            .for_each(|x| *x = i16::from_le_bytes(self.take()));
+    }
+    fn u16s(&mut self, v: &mut [u16]) {
+        v.iter_mut()
+            .for_each(|x| *x = u16::from_le_bytes(self.take()));
+    }
+    fn i8s(&mut self, v: &mut [i8]) {
+        v.iter_mut()
+            .for_each(|x| *x = i8::from_le_bytes(self.take()));
+    }
+}
+
+/// Counts the bytes of the fields.
+struct Sizer(usize);
+
+impl Fields for Sizer {
+    fn u32(&mut self, _: &mut u32) {
+        self.0 += 4;
+    }
+    fn i16s(&mut self, v: &mut [i16]) {
+        self.0 += 2 * v.len();
+    }
+    fn u16s(&mut self, v: &mut [u16]) {
+        self.0 += 2 * v.len();
+    }
+    fn i8s(&mut self, v: &mut [i8]) {
+        self.0 += v.len();
+    }
+}
+
+/// Size in bytes of a state packet.
+pub fn packet_len() -> usize {
+    let mut sizer = Sizer(0);
+    visit_fields(&mut sizer, &mut 0, &mut State::default());
+    MAGIC.len() + sizer.0
+}
 
 /// Why a datagram was not accepted as a [`Packet`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,24 +150,11 @@ pub struct Packet {
 }
 
 impl Packet {
-    pub fn encode(&self) -> [u8; PACKET_LEN] {
-        let st = &self.state;
-        let mut w = Writer {
-            b: [0u8; PACKET_LEN],
-            at: 0,
-        };
-        w.bytes(&MAGIC);
-        w.bytes(&self.seq.to_le_bytes());
-        w.bytes(&st.button_bits().to_le_bytes());
-        st.axes.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.hat.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.pads.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.pad_pressure
-            .iter()
-            .for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.accel.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.gyro.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        w.b
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = Writer(MAGIC.to_vec());
+        let (mut seq, mut state) = (self.seq, self.state);
+        visit_fields(&mut w, &mut seq, &mut state);
+        w.0
     }
 
     pub fn decode(b: &[u8]) -> Option<Packet> {
@@ -70,60 +169,39 @@ impl Packet {
         if b[0..4] != MAGIC {
             return Err(DecodeError::Version(b[3]));
         }
-        if b.len() != PACKET_LEN {
+        if b.len() != packet_len() {
             return Err(DecodeError::Length(b.len()));
         }
-        Packet::decode_body(b).ok_or(DecodeError::Length(b.len()))
-    }
-
-    fn decode_body(b: &[u8]) -> Option<Packet> {
-        let mut r = Reader { b, at: 4 };
-        let seq = u32::from_le_bytes(r.take()?);
-        let mut st = State::from_button_bits(u32::from_le_bytes(r.take()?));
-        for v in st.axes.iter_mut() {
-            *v = i16::from_le_bytes(r.take()?);
-        }
-        for v in st.hat.iter_mut() {
-            *v = i8::from_le_bytes(r.take()?);
-        }
-        for v in st.pads.iter_mut() {
-            *v = i16::from_le_bytes(r.take()?);
-        }
-        for v in st.pad_pressure.iter_mut() {
-            *v = u16::from_le_bytes(r.take()?);
-        }
-        for v in st.accel.iter_mut() {
-            *v = i16::from_le_bytes(r.take()?);
-        }
-        for v in st.gyro.iter_mut() {
-            *v = i16::from_le_bytes(r.take()?);
-        }
-        Some(Packet { seq, state: st })
+        let mut reader = Reader { bytes: &b[4..] };
+        let (mut seq, mut state) = (0, State::default());
+        visit_fields(&mut reader, &mut seq, &mut state);
+        Ok(Packet { seq, state })
     }
 }
 
-struct Writer {
-    b: [u8; PACKET_LEN],
-    at: usize,
+/// The server's "I hear you": echoes the sequence number it last accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ack {
+    pub seq: u32,
 }
 
-impl Writer {
-    fn bytes(&mut self, v: &[u8]) {
-        self.b[self.at..self.at + v.len()].copy_from_slice(v);
-        self.at += v.len();
+impl Ack {
+    pub const LEN: usize = 8;
+
+    pub fn encode(&self) -> [u8; Ack::LEN] {
+        let mut b = [0u8; Ack::LEN];
+        b[..4].copy_from_slice(&ACK_MAGIC);
+        b[4..].copy_from_slice(&self.seq.to_le_bytes());
+        b
     }
-}
 
-struct Reader<'a> {
-    b: &'a [u8],
-    at: usize,
-}
-
-impl Reader<'_> {
-    fn take<const N: usize>(&mut self) -> Option<[u8; N]> {
-        let v = self.b.get(self.at..self.at + N)?.try_into().ok()?;
-        self.at += N;
-        Some(v)
+    pub fn decode(b: &[u8]) -> Option<Ack> {
+        if b.len() != Ack::LEN || b[..4] != ACK_MAGIC {
+            return None;
+        }
+        Some(Ack {
+            seq: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+        })
     }
 }
 
@@ -136,15 +214,58 @@ pub fn is_newer(seq: u32, last: u32) -> bool {
 mod tests {
     use super::*;
 
+    /// Gives every field a different non-zero value, so a field missing from
+    /// the table (or swapped with another) cannot round-trip by accident.
+    struct Filler(i32);
+
+    impl Filler {
+        fn next(&mut self) -> i32 {
+            self.0 += 1;
+            self.0
+        }
+    }
+
+    impl Fields for Filler {
+        fn u32(&mut self, v: &mut u32) {
+            *v = 0x0101_0000 + self.next() as u32;
+        }
+        fn i16s(&mut self, v: &mut [i16]) {
+            v.iter_mut().for_each(|x| *x = -(self.next() as i16) * 100);
+        }
+        fn u16s(&mut self, v: &mut [u16]) {
+            v.iter_mut().for_each(|x| *x = 40_000 + self.next() as u16);
+        }
+        fn i8s(&mut self, v: &mut [i8]) {
+            v.iter_mut().for_each(|x| *x = -(self.next() as i8));
+        }
+    }
+
+    fn every_field_set() -> Packet {
+        let (mut seq, mut state) = (0, State::default());
+        visit_fields(&mut Filler(0), &mut seq, &mut state);
+        Packet { seq, state }
+    }
+
     #[test]
-    fn round_trip() {
+    fn every_field_round_trips() {
+        let p = every_field_set();
+        assert_eq!(Packet::decode(&p.encode()), Some(p));
+    }
+
+    #[test]
+    fn the_packet_length_follows_the_table() {
+        assert_eq!(packet_len(), 50);
+        assert_eq!(every_field_set().encode().len(), packet_len());
+        assert!(packet_len() <= MAX_DATAGRAM);
+    }
+
+    #[test]
+    fn extreme_values_round_trip() {
         let mut state = State::from_button_bits(0x8005_0401);
         state.axes = [-32768, 32767, 0, -1, 255, 7];
         state.hat = [-1, 1];
         state.pads = [-5, 6, 32767, -32768];
         state.pad_pressure = [0, 65535];
-        state.accel = [1, -2, 3];
-        state.gyro = [-4, 5, -6];
         let p = Packet {
             seq: 0xdead_beef,
             state,
@@ -166,8 +287,17 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert_eq!(Packet::decode(&[0; PACKET_LEN]), None);
+        assert_eq!(Packet::decode(&vec![0; packet_len()]), None);
         assert_eq!(Packet::decode(b"DVC2"), None);
+    }
+
+    #[test]
+    fn ack_round_trips_and_is_not_a_packet() {
+        let ack = Ack { seq: 0xabcd_1234 };
+        assert_eq!(Ack::decode(&ack.encode()), Some(ack));
+        assert_eq!(Packet::try_decode(&ack.encode()), Err(DecodeError::NotOurs));
+        assert_eq!(Ack::decode(b"DVA2"), None);
+        assert_eq!(Ack::decode(&[0; Ack::LEN]), None);
     }
 
     #[test]

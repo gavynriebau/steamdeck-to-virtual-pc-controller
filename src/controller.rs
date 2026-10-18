@@ -89,6 +89,10 @@ impl State {
         self.buttons
     }
 
+    pub fn set_button_bits(&mut self, bits: u32) {
+        self.buttons = bits;
+    }
+
     pub fn from_button_bits(bits: u32) -> Self {
         State {
             buttons: bits,
