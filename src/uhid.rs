@@ -5,6 +5,7 @@
 
 use crate::controller::{Button, State, TRIGGER_MAX, axis};
 use crate::lock;
+use crate::sink::Sink;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
@@ -42,6 +43,27 @@ const ATTRIBUTES_REPLY: [u8; 33] = [
 ];
 
 const SERIAL: &[u8] = b"DECKVC0000001";
+
+/// The emulated Steam Controller as a [`Sink`]: states handed to `apply` are
+/// streamed to the host as input reports by a background thread.
+pub struct SteamSink {
+    shared: Arc<Mutex<State>>,
+}
+
+impl SteamSink {
+    pub fn create(name: &str) -> io::Result<Self> {
+        let device = SteamControllerDevice::create(name)?;
+        let shared = Arc::new(Mutex::new(State::default()));
+        device.stream(shared.clone(), std::time::Duration::from_millis(4));
+        Ok(SteamSink { shared })
+    }
+}
+
+impl Sink for SteamSink {
+    fn apply(&mut self, state: &State) {
+        *lock(&self.shared) = *state;
+    }
+}
 
 pub struct SteamControllerDevice {
     file: Arc<Mutex<File>>,
@@ -118,7 +140,7 @@ impl SteamControllerDevice {
 
     /// Stream the shared state as input reports, like the real controller does
     /// (Steam treats a controller that goes quiet as disconnected).
-    pub fn stream(self, state: Arc<Mutex<State>>, interval: std::time::Duration) {
+    fn stream(self, state: Arc<Mutex<State>>, interval: std::time::Duration) {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let mut seq = 0u32;

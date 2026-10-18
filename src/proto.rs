@@ -17,6 +17,20 @@ pub enum DecodeError {
     Length(usize),
 }
 
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::NotOurs => write!(f, "not a deck-virtual-controller packet"),
+            DecodeError::Version(v) => write!(
+                f,
+                "protocol version {} (this build speaks {}); update the other side",
+                *v as char, MAGIC[3] as char
+            ),
+            DecodeError::Length(n) => write!(f, "wrong packet size ({n} bytes)"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Packet {
     pub seq: u32,

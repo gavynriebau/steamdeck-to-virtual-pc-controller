@@ -5,10 +5,13 @@ pub mod config;
 pub mod controller;
 pub mod deck_hid;
 pub mod proto;
+pub mod serve;
 pub mod session;
+pub mod sink;
 pub mod startup;
 pub mod uhid;
 pub mod xbox_pad;
+pub mod xbox_sink;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
