@@ -7,8 +7,9 @@ use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use steamdeck_as_pc_controller::config::Validate;
+use steamdeck_as_pc_controller::controller::{self, axis};
 use steamdeck_as_pc_controller::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::{deck_hid, lock, proto};
+use steamdeck_as_pc_controller::{deck_hid, lock, proto, xbox_pad};
 
 const APP: &str = "deck-virtual-controller-client";
 
@@ -65,7 +66,7 @@ const PREFERRED: [&str; 2] = ["Microsoft X-Box 360 pad", "Valve Software Steam C
 
 fn has_gamepad_buttons(d: &RawDevice) -> bool {
     d.supported_keys()
-        .is_some_and(|k| k.contains(evdev::KeyCode(proto::BUTTONS[0])))
+        .is_some_and(|k| k.contains(evdev::KeyCode(xbox_pad::BUTTONS[0].1)))
 }
 
 fn find_device(want: &str) -> Option<(std::path::PathBuf, RawDevice)> {
@@ -89,7 +90,7 @@ fn find_device(want: &str) -> Option<(std::path::PathBuf, RawDevice)> {
 }
 
 struct Shared {
-    state: proto::State,
+    state: controller::State,
     seq: u32,
 }
 
@@ -108,7 +109,7 @@ fn send(sock: &UdpSocket, shared: &Mutex<Shared>, bump: bool) {
 /// View + Menu pressed together: tell the server to release everything, then exit.
 /// The exit code 0 tells the Deck app to close too.
 fn stop_streaming(sock: &UdpSocket, shared: &Mutex<Shared>) -> ! {
-    lock(shared).state = proto::State::default();
+    lock(shared).state = controller::State::default();
     for _ in 0..3 {
         send(sock, shared, true);
         std::thread::sleep(Duration::from_millis(20));
@@ -117,38 +118,29 @@ fn stop_streaming(sock: &UdpSocket, shared: &Mutex<Shared>) -> ! {
     std::process::exit(0);
 }
 
-fn apply(state: &mut proto::State, ev: evdev::InputEvent, deadzone: i32) -> bool {
+fn apply(state: &mut controller::State, ev: evdev::InputEvent, deadzone: i32) -> bool {
+    let before = *state;
     match ev.destructure() {
         EventSummary::Key(_, code, v) => {
-            let Some(bit) = proto::BUTTONS.iter().position(|&c| c == code.0) else {
-                return false;
-            };
-            let old = state.buttons;
-            if v != 0 {
-                state.buttons |= 1 << bit;
-            } else {
-                state.buttons &= !(1 << bit);
+            if let Some(button) = xbox_pad::button_for_code(code.0) {
+                state.set(button, v != 0);
             }
-            old != state.buttons
         }
         EventSummary::AbsoluteAxis(_, code, v) => {
-            if let Some(i) = proto::AXES.iter().position(|&c| c == code.0) {
-                let is_stick = !matches!(i, 2 | 5);
-                let v = if is_stick && v.abs() < deadzone { 0 } else { v };
-                let v = v.clamp(proto::STICK_MIN, proto::STICK_MAX) as i16;
-                let old = state.axes[i];
-                state.axes[i] = v;
-                old != v
-            } else if let Some(i) = proto::HAT_AXES.iter().position(|&c| c == code.0) {
-                let old = state.hat[i];
+            if let Some(i) = xbox_pad::AXES.iter().position(|&c| c == code.0) {
+                let v = if axis::STICKS.contains(&i) && v.abs() < deadzone {
+                    0
+                } else {
+                    v
+                };
+                state.axes[i] = v.clamp(xbox_pad::STICK_MIN, xbox_pad::STICK_MAX) as i16;
+            } else if let Some(i) = xbox_pad::HAT_AXES.iter().position(|&c| c == code.0) {
                 state.hat[i] = v.clamp(-1, 1) as i8;
-                old != state.hat[i]
-            } else {
-                false
             }
         }
-        _ => false,
+        _ => {}
     }
+    *state != before
 }
 
 fn main() {
@@ -165,7 +157,7 @@ fn main() {
     eprintln!("sending to {}", cfg.server_addr);
 
     let shared = Arc::new(Mutex::new(Shared {
-        state: proto::State::default(),
+        state: controller::State::default(),
         seq: 0,
     }));
 
@@ -220,7 +212,7 @@ fn run_hidraw(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, deadzone: i32) -> !
                     if !got_data.swap(true, Ordering::Relaxed) {
                         eprintln!("controller data from {}", path.display());
                     }
-                    for i in [0, 1, 3, 4] {
+                    for i in axis::STICKS {
                         if (st.axes[i] as i32).abs() < deadzone {
                             st.axes[i] = 0;
                         }
@@ -276,7 +268,7 @@ fn run_evdev(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, cfg: &Config) -> ! {
                 send(sock, shared, true);
             }
         }
-        lock(shared).state = proto::State::default();
+        lock(shared).state = controller::State::default();
         send(sock, shared, true);
         std::thread::sleep(Duration::from_secs(1));
     }

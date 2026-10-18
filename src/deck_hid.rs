@@ -4,33 +4,33 @@
 //! layout. Offsets follow the Deck report layout (as used by SDL) and were
 //! checked against the real hardware.
 
-use crate::proto::{self, State};
+use crate::controller::{Button, State, TRIGGER_MAX, axis};
 
 pub const REPORT_LEN: usize = 64;
 const HEADER: [u8; 4] = [0x01, 0x00, 0x09, 0x40];
 
-/// (bit in the 64-bit button field, bit in `State::buttons`)
-const BUTTON_MAP: [(u32, u32); 20] = [
-    (7, 0),   // A
-    (5, 1),   // B
-    (6, 2),   // X
-    (4, 3),   // Y
-    (3, 4),   // L1
-    (2, 5),   // R1
-    (12, 6),  // View
-    (14, 7),  // Menu
-    (13, 8),  // Steam
-    (22, 9),  // L3
-    (26, 10), // R3
-    (41, 11), // L4
-    (42, 12), // R4
-    (15, proto::BTN_L5),
-    (16, proto::BTN_R5),
-    (19, proto::BTN_LPAD_TOUCH),
-    (20, proto::BTN_RPAD_TOUCH),
-    (17, proto::BTN_LPAD_CLICK),
-    (18, proto::BTN_RPAD_CLICK),
-    (50, proto::BTN_QAM),
+/// (bit in the Deck's 64-bit button field, button)
+const BUTTON_MAP: [(u32, Button); 20] = [
+    (7, Button::A),
+    (5, Button::B),
+    (6, Button::X),
+    (4, Button::Y),
+    (3, Button::L1),
+    (2, Button::R1),
+    (12, Button::View),
+    (14, Button::Menu),
+    (13, Button::Steam),
+    (22, Button::L3),
+    (26, Button::R3),
+    (41, Button::L4),
+    (42, Button::R4),
+    (15, Button::L5),
+    (16, Button::R5),
+    (19, Button::LeftPadTouch),
+    (20, Button::RightPadTouch),
+    (17, Button::LeftPadClick),
+    (18, Button::RightPadClick),
+    (50, Button::QuickAccess),
 ];
 const DPAD_UP: u32 = 8;
 const DPAD_RIGHT: u32 = 9;
@@ -58,37 +58,31 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
     let bits = u64::from_le_bytes(b[8..16].try_into().ok()?);
     let on = |n: u32| bits >> n & 1 != 0;
 
-    let mut buttons = 0u32;
-    for (src, dst) in BUTTON_MAP {
-        if on(src) {
-            buttons |= 1 << dst;
-        }
+    let mut state = State::default();
+    for (bit, button) in BUTTON_MAP {
+        state.set(button, on(bit));
     }
 
-    let trigger = |off| i16_at(b, off).max(0) >> 7; // 0..32767 -> 0..255
-    // The Deck reports stick Y as up-positive; evdev expects up-negative.
-    let axes = [
-        i16_at(b, 48),
-        neg(i16_at(b, 50)),
-        trigger(44),
-        i16_at(b, 52),
-        neg(i16_at(b, 54)),
-        trigger(46),
-    ];
-    let hat = [
+    // Triggers: 0..32767 on the Deck -> 0..=TRIGGER_MAX.
+    let trigger = |off| i16_at(b, off).max(0) >> 7;
+    debug_assert_eq!(i16::MAX >> 7, TRIGGER_MAX);
+    // The Deck reports stick Y as up-positive; the state is down-positive.
+    state.axes[axis::LEFT_X] = i16_at(b, 48);
+    state.axes[axis::LEFT_Y] = neg(i16_at(b, 50));
+    state.axes[axis::LEFT_TRIGGER] = trigger(44);
+    state.axes[axis::RIGHT_X] = i16_at(b, 52);
+    state.axes[axis::RIGHT_Y] = neg(i16_at(b, 54));
+    state.axes[axis::RIGHT_TRIGGER] = trigger(46);
+    state.hat = [
         on(DPAD_RIGHT) as i8 - on(DPAD_LEFT) as i8,
         on(DPAD_DOWN) as i8 - on(DPAD_UP) as i8,
     ];
     let s16 = |off| i16_at(b, off);
-    Some(State {
-        buttons,
-        axes,
-        hat,
-        pads: [s16(16), s16(18), s16(20), s16(22)],
-        pad_pressure: [u16_at(b, 56), u16_at(b, 58)],
-        accel: [s16(24), s16(26), s16(28)],
-        gyro: [s16(30), s16(32), s16(34)],
-    })
+    state.pads = [s16(16), s16(18), s16(20), s16(22)];
+    state.pad_pressure = [u16_at(b, 56), u16_at(b, 58)];
+    state.accel = [s16(24), s16(26), s16(28)];
+    state.gyro = [s16(30), s16(32), s16(34)];
+    Some(state)
 }
 
 /// hidraw nodes belonging to the Deck's built-in controller.
@@ -131,7 +125,8 @@ mod tests {
             32767,
         ))
         .unwrap();
-        assert_eq!(s.buttons, 1 | 1 << 11);
+        assert!(s.pressed(Button::A) && s.pressed(Button::L4));
+        assert!(!s.pressed(Button::B));
         assert_eq!(s.pads, [0; 4]);
         assert_eq!(s.hat, [-1, -1]);
         assert_eq!(s.axes[0], 1000);

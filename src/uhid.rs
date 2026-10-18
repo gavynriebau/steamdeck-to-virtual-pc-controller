@@ -3,8 +3,8 @@
 //! a real controller. The kernel's `hid-steam` driver and the Steam client then
 //! see the same HID device a real wired controller presents.
 
+use crate::controller::{Button, State, TRIGGER_MAX, axis};
 use crate::lock;
-use crate::proto::{self, State};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
@@ -175,9 +175,12 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     r[0] = 0x42;
     r[1] = seq as u8;
 
-    let b = |bit: u32| st.buttons >> bit & 1 != 0;
-    let trig = |v: i16| (v.clamp(0, 255) as i32 * 32767 / 255) as i16;
-    let (tl, tr) = (trig(st.axes[2]), trig(st.axes[5]));
+    let b = |button: Button| st.pressed(button);
+    let trig = |v: i16| (v.clamp(0, TRIGGER_MAX) as i32 * 32767 / TRIGGER_MAX as i32) as i16;
+    let (tl, tr) = (
+        trig(st.axes[axis::LEFT_TRIGGER]),
+        trig(st.axes[axis::RIGHT_TRIGGER]),
+    );
     let set = |byte: &mut u8, bits: &[(bool, u8)]| {
         for &(on, bit) in bits {
             *byte |= (on as u8) << bit;
@@ -187,38 +190,38 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     set(
         &mut r[2],
         &[
-            (b(0), 0),              // A
-            (b(1), 1),              // B
-            (b(2), 2),              // X
-            (b(3), 3),              // Y
-            (b(proto::BTN_QAM), 4), // quick access
-            (b(10), 5),             // right stick click
-            (b(7), 6),              // Menu -> Start
-            (b(12), 7),             // R4 -> right top grip
+            (b(Button::A), 0),
+            (b(Button::B), 1),
+            (b(Button::X), 2),
+            (b(Button::Y), 3),
+            (b(Button::QuickAccess), 4),
+            (b(Button::R3), 5),   // right stick click
+            (b(Button::Menu), 6), // Start
+            (b(Button::R4), 7),   // right top grip
         ],
     );
     set(
         &mut r[3],
         &[
-            (b(proto::BTN_R5), 0), // right bottom grip
-            (b(5), 1),             // R1
-            (st.hat[1] > 0, 2),    // dpad down
-            (st.hat[0] > 0, 3),    // dpad right
-            (st.hat[0] < 0, 4),    // dpad left
-            (st.hat[1] < 0, 5),    // dpad up
-            (b(6), 6),             // View -> Select
-            (b(9), 7),             // left stick click
+            (b(Button::R5), 0), // right bottom grip
+            (b(Button::R1), 1),
+            (st.hat[1] > 0, 2),   // dpad down
+            (st.hat[0] > 0, 3),   // dpad right
+            (st.hat[0] < 0, 4),   // dpad left
+            (st.hat[1] < 0, 5),   // dpad up
+            (b(Button::View), 6), // Select
+            (b(Button::L3), 7),   // left stick click
         ],
     );
     set(
         &mut r[4],
         &[
-            (b(8), 0),             // Steam
-            (b(11), 1),            // L4 -> left top grip
-            (b(proto::BTN_L5), 2), // left bottom grip
-            (b(4), 3),             // L1
-            (b(proto::BTN_RPAD_TOUCH), 5),
-            (b(proto::BTN_RPAD_CLICK), 6),
+            (b(Button::Steam), 0),
+            (b(Button::L4), 1), // left top grip
+            (b(Button::L5), 2), // left bottom grip
+            (b(Button::L1), 3),
+            (b(Button::RightPadTouch), 5),
+            (b(Button::RightPadClick), 6),
             (tr == 32767, 7), // right trigger full pull
         ],
     );
@@ -226,8 +229,8 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     set(
         &mut r[5],
         &[
-            (b(proto::BTN_LPAD_TOUCH), 1),
-            (b(proto::BTN_LPAD_CLICK), 2),
+            (b(Button::LeftPadTouch), 1),
+            (b(Button::LeftPadClick), 2),
             (tl == 32767, 3), // left trigger full pull
         ],
     );
@@ -235,10 +238,10 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     put(&mut r, 6, tl);
     put(&mut r, 8, tr);
     // Sticks: the device reports "up is positive".
-    put(&mut r, 10, st.axes[0]);
-    put(&mut r, 12, st.axes[1].saturating_neg());
-    put(&mut r, 14, st.axes[3]);
-    put(&mut r, 16, st.axes[4].saturating_neg());
+    put(&mut r, 10, st.axes[axis::LEFT_X]);
+    put(&mut r, 12, st.axes[axis::LEFT_Y].saturating_neg());
+    put(&mut r, 14, st.axes[axis::RIGHT_X]);
+    put(&mut r, 16, st.axes[axis::RIGHT_Y].saturating_neg());
     // Trackpads (already up-positive) and their pressure.
     put(&mut r, 18, st.pads[0]);
     put(&mut r, 20, st.pads[1]);
@@ -264,14 +267,11 @@ mod tests {
 
     #[test]
     fn report_layout() {
-        let st = State {
-            buttons: 1 | 1 << 8,
-            axes: [100, -200, 255, 0, 0, 0],
-            hat: [1, 0],
-            pads: [7, -8, 0, 0],
-            accel: [9, 0, 0],
-            ..Default::default()
-        };
+        let mut st = State::default().with(Button::A).with(Button::Steam);
+        st.axes = [100, -200, 255, 0, 0, 0];
+        st.hat = [1, 0];
+        st.pads = [7, -8, 0, 0];
+        st.accel = [9, 0, 0];
         let r = state_report(7, 0, &st);
         assert_eq!(r[0], 0x42);
         assert_eq!(r[2] & 1, 1); // A
@@ -293,12 +293,10 @@ mod tests {
             .map(|i| u8::from_str_radix(&REAL[i * 2..i * 2 + 2], 16).unwrap())
             .collect();
         // Sticks as sent over the wire are down-positive; the device is up-positive.
-        let st = State {
-            axes: [-1400, -340, 0, -500, 384, 0],
-            accel: [885, 6009, 15311],
-            gyro: [-75, -17, 11],
-            ..Default::default()
-        };
+        let mut st = State::default();
+        st.axes = [-1400, -340, 0, -500, 384, 0];
+        st.accel = [885, 6009, 15311];
+        st.gyro = [-75, -17, 11];
         let ours = state_report(0xd1, 2175680, &st);
         assert_eq!(real.len(), ours.len());
         assert_eq!(

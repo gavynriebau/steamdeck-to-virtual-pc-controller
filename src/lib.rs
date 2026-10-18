@@ -2,10 +2,12 @@
 //! and server (runs on the PC).
 
 pub mod config;
+pub mod controller;
 pub mod deck_hid;
 pub mod proto;
 pub mod startup;
 pub mod uhid;
+pub mod xbox_pad;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
