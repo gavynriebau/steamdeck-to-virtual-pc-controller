@@ -4,7 +4,9 @@
 pub mod config;
 pub mod controller;
 pub mod deck_hid;
+pub mod evdev_source;
 pub mod proto;
+pub mod publisher;
 pub mod serve;
 pub mod session;
 pub mod sink;
