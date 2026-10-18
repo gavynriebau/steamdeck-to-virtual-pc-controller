@@ -139,6 +139,24 @@ mod tests {
         assert_eq!(s.axes[2], 255);
     }
 
+    /// View + Menu as reported by a real Deck (`0x5000`, plus the extra bits
+    /// 46/47 it sets while a button is held) must trigger the stop chord.
+    #[test]
+    fn view_plus_menu_is_the_stop_chord() {
+        let both = parse_report(&report(0x5000 | 3 << 46, 0, 0, 0)).unwrap();
+        assert!(both.is_stop_chord());
+        assert!(
+            !parse_report(&report(0x1000, 0, 0, 0))
+                .unwrap()
+                .is_stop_chord()
+        );
+        assert!(
+            !parse_report(&report(0x4000, 0, 0, 0))
+                .unwrap()
+                .is_stop_chord()
+        );
+    }
+
     #[test]
     fn ignores_other_reports() {
         assert_eq!(parse_report(&[0u8; REPORT_LEN]), None);
