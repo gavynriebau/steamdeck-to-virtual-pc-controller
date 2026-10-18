@@ -9,5 +9,8 @@ timeout_ms = 1000
 # Name of the virtual gamepad that appears on the PC.
 name = "Steam Deck Virtual Controller"
 
-# Type of virtual pad: "xbox" (Xbox 360 controller) or "steam" (Valve Steam Controller).
+# Type of virtual pad:
+#   "steam" - emulated 2026 Steam Controller (buttons, sticks, trackpads, gyro).
+#             Needs write access to /dev/uhid (e.g. a udev rule: KERNEL=="uhid", GROUP="input", MODE="0660").
+#   "xbox"  - Xbox 360 controller via uinput (buttons, sticks, triggers only).
 controller_type = "steam"

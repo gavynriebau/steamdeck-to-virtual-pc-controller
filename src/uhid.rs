@@ -1,9 +1,9 @@
-//! A virtual original Steam Controller (28de:1102, wired) created through
-//! `/dev/uhid`. The kernel's `hid-steam` driver binds to it and exposes the
-//! same evdev + hidraw nodes a real controller would, so Steam and SDL treat it
-//! as a genuine Steam Controller.
+//! A virtual 2026 Steam Controller ("Ibex", 28de:1302) created through
+//! `/dev/uhid`, using the report descriptor and handshake replies captured from
+//! a real controller. The kernel's `hid-steam` driver and the Steam client then
+//! see the same HID device a real wired controller presents.
 
-use crate::proto::State;
+use crate::proto::{self, State};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
@@ -14,32 +14,31 @@ const UHID_DESTROY: u32 = 1;
 const UHID_START: u32 = 2;
 const UHID_CREATE2: u32 = 11;
 const UHID_INPUT2: u32 = 12;
-const UHID_GET_REPORT: u32 = 13;
-const UHID_GET_REPORT_REPLY: u32 = 14;
-const UHID_SET_REPORT: u32 = 15;
-const UHID_SET_REPORT_REPLY: u32 = 16;
+const UHID_GET_REPORT: u32 = 9;
+const UHID_GET_REPORT_REPLY: u32 = 10;
+const UHID_SET_REPORT: u32 = 13;
+const UHID_SET_REPORT_REPLY: u32 = 14;
 
 const BUS_USB: u16 = 3;
-const REPORT_LEN: usize = 64;
+const REPORT_LEN: usize = 54;
+const FEATURE_LEN: usize = 64;
 
-/// One vendor-defined 64-byte input report and 64-byte feature report, no report IDs.
-const REPORT_DESCRIPTOR: &[u8] = &[
-    0x06, 0x00, 0xFF, // Usage Page (Vendor 0xFF00)
-    0x09, 0x01, //       Usage (1)
-    0xA1, 0x01, //       Collection (Application)
-    0x09, 0x02, //         Usage (2)
-    0x15, 0x00, //         Logical Minimum (0)
-    0x26, 0xFF, 0x00, //   Logical Maximum (255)
-    0x75, 0x08, //         Report Size (8)
-    0x95, REPORT_LEN as u8, // Report Count (64)
-    0x81, 0x02, //         Input (Data,Var,Abs)
-    0x09, 0x03, //         Usage (3)
-    0x95, REPORT_LEN as u8, // Report Count (64)
-    0xB1, 0x02, //         Feature (Data,Var,Abs)
-    0xC0, //             End Collection
+/// Report descriptor dumped from a real controller (hex, one line).
+const REPORT_DESCRIPTOR_HEX: &str = include_str!("ibex_report_descriptor.hex");
+
+fn report_descriptor() -> Vec<u8> {
+    let hex = REPORT_DESCRIPTOR_HEX.trim();
+    (0..hex.len() / 2).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap()).collect()
+}
+
+/// Captured reply to the `0x83` (get attributes) feature command.
+const ATTRIBUTES_REPLY: [u8; 33] = [
+    0x01, 0x83, 0x1e, 0x01, 0x02, 0x13, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x2e, 0xf9,
+    0xd2, 0x68, 0x04, 0x23, 0xf3, 0xcf, 0x6a, 0x09, 0x48, 0x00, 0x00, 0x00, 0x0b, 0xa0, 0x0f, 0x00,
+    0x00,
 ];
 
-const SERIAL: &[u8] = b"DECKVC0001";
+const SERIAL: &[u8] = b"DECKVC0000001";
 
 pub struct SteamControllerDevice {
     file: Arc<Mutex<File>>,
@@ -59,12 +58,13 @@ impl SteamControllerDevice {
         put_u32(&mut ev, 0, UHID_CREATE2);
         let n = name.len().min(127);
         ev[4..4 + n].copy_from_slice(&name.as_bytes()[..n]);
-        put_u16(&mut ev, 260, REPORT_DESCRIPTOR.len() as u16);
+        let rd = report_descriptor();
+        put_u16(&mut ev, 260, rd.len() as u16);
         put_u16(&mut ev, 262, BUS_USB);
         put_u32(&mut ev, 264, 0x28de);
-        put_u32(&mut ev, 268, 0x1102);
-        put_u32(&mut ev, 272, 0x0001);
-        ev[280..280 + REPORT_DESCRIPTOR.len()].copy_from_slice(REPORT_DESCRIPTOR);
+        put_u32(&mut ev, 268, 0x1302);
+        put_u32(&mut ev, 272, 0x0404);
+        ev[280..280 + rd.len()].copy_from_slice(&rd);
         file.write_all(&ev)?;
 
         // Answer the driver's feature-report traffic on a background thread.
@@ -88,9 +88,7 @@ impl SteamControllerDevice {
                     }
                     UHID_GET_REPORT => {
                         let id = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-                        // Report ID 0 is returned as a leading byte, which the driver strips.
-                        let mut reply = vec![0u8];
-                        reply.extend(feature_reply(&last_cmd));
+                        let reply = feature_reply(&last_cmd);
                         let mut r = vec![0u8; EVENT_LEN];
                         put_u32(&mut r, 0, UHID_GET_REPORT_REPLY);
                         put_u32(&mut r, 4, id);
@@ -106,8 +104,26 @@ impl SteamControllerDevice {
         Ok(SteamControllerDevice { file })
     }
 
-    pub fn send_state(&self, seq: u32, st: &State) -> io::Result<()> {
-        let report = state_report(seq, st);
+    /// Stream the shared state as input reports, like the real controller does
+    /// (Steam treats a controller that goes quiet as disconnected).
+    pub fn stream(self, state: Arc<Mutex<State>>, interval: std::time::Duration) {
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut seq = 0u32;
+            loop {
+                std::thread::sleep(interval);
+                seq = seq.wrapping_add(1);
+                let st = *state.lock().unwrap();
+                let ts = start.elapsed().as_micros() as u32;
+                if let Err(e) = self.send_report(&state_report(seq, ts, &st)) {
+                    eprintln!("uhid write failed: {e}");
+                    return;
+                }
+            }
+        });
+    }
+
+    fn send_report(&self, report: &[u8]) -> io::Result<()> {
         let mut ev = vec![0u8; EVENT_LEN];
         put_u32(&mut ev, 0, UHID_INPUT2);
         put_u16(&mut ev, 4, report.len() as u16);
@@ -124,83 +140,97 @@ impl Drop for SteamControllerDevice {
     }
 }
 
-/// Reply to a GET_REPORT, given the last command the driver wrote.
+/// Reply to a GET_REPORT, given the last command the host wrote
+/// (`[report id 1, command, length, payload...]`).
 fn feature_reply(cmd: &[u8]) -> Vec<u8> {
-    let mut r = vec![0u8; REPORT_LEN];
-    match cmd.first() {
-        // ID_GET_STRING_ATTRIBUTE: {0xAE, len, ATTRIB_STR_UNIT_SERIAL, serial...}
+    let mut r = vec![0u8; FEATURE_LEN];
+    match cmd.get(1) {
+        // ID_GET_STRING_ATTRIBUTE: {1, 0xAE, len, ATTRIB_STR_UNIT_SERIAL, serial...}
         Some(0xAE) => {
-            r[0] = 0xAE;
-            r[1] = (SERIAL.len() + 1) as u8;
-            r[2] = 0x01;
-            r[3..3 + SERIAL.len()].copy_from_slice(SERIAL);
+            r[0..4].copy_from_slice(&[0x01, 0xAE, 0x14, 0x01]);
+            r[4..4 + SERIAL.len()].copy_from_slice(SERIAL);
         }
-        // ID_GET_ATTRIBUTES_VALUES: no attributes.
-        Some(0x83) => {
-            r[0] = 0x83;
-            r[1] = 5;
-        }
-        Some(&c) => {
-            r[0] = c;
-            r[1] = 1;
-        }
-        None => {}
+        Some(0x83) => r[..ATTRIBUTES_REPLY.len()].copy_from_slice(&ATTRIBUTES_REPLY),
+        Some(&c) => r[0..3].copy_from_slice(&[0x01, c, 0x00]),
+        None => r[0] = 0x01,
     }
     r
 }
 
-/// The 64-byte `ID_CONTROLLER_STATE` input report for a gamepad state.
-pub fn state_report(seq: u32, st: &State) -> [u8; REPORT_LEN] {
+/// The 54-byte `0x42` input report for a gamepad state.
+pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     let mut r = [0u8; REPORT_LEN];
-    r[0..4].copy_from_slice(&[0x01, 0x00, 0x01, 0x3c]);
-    r[4..8].copy_from_slice(&seq.to_le_bytes());
+    r[0] = 0x42;
+    r[1] = seq as u8;
 
-    let b = |bit: usize| st.buttons >> bit & 1 != 0;
-    let (trig_l, trig_r) = (st.axes[2].clamp(0, 255) as u8, st.axes[5].clamp(0, 255) as u8);
-    let mut b8 = 0u8;
-    for (on, bit) in [
-        (trig_r == 255, 0), // right trigger click
-        (trig_l == 255, 1), // left trigger click
-        (b(5), 2),          // R1
-        (b(4), 3),          // L1
-        (b(3), 4),          // Y
-        (b(1), 5),          // B
-        (b(2), 6),          // X
-        (b(0), 7),          // A
-    ] {
-        b8 |= (on as u8) << bit;
+    let b = |bit: u32| st.buttons >> bit & 1 != 0;
+    let trig = |v: i16| (v.clamp(0, 255) as i32 * 32767 / 255) as i16;
+    let (tl, tr) = (trig(st.axes[2]), trig(st.axes[5]));
+    let set = |byte: &mut u8, bits: &[(bool, u8)]| {
+        for &(on, bit) in bits {
+            *byte |= (on as u8) << bit;
+        }
+    };
+    // Bit positions were captured from a real controller.
+    set(&mut r[2], &[
+        (b(0), 0),                // A
+        (b(1), 1),                // B
+        (b(2), 2),                // X
+        (b(3), 3),                // Y
+        (b(proto::BTN_QAM), 4),   // quick access
+        (b(10), 5),               // right stick click
+        (b(7), 6),                // Menu -> Start
+        (b(12), 7),               // R4 -> right top grip
+    ]);
+    set(&mut r[3], &[
+        (b(proto::BTN_R5), 0),    // right bottom grip
+        (b(5), 1),                // R1
+        (st.hat[1] > 0, 2),       // dpad down
+        (st.hat[0] > 0, 3),       // dpad right
+        (st.hat[0] < 0, 4),       // dpad left
+        (st.hat[1] < 0, 5),       // dpad up
+        (b(6), 6),                // View -> Select
+        (b(9), 7),                // left stick click
+    ]);
+    set(&mut r[4], &[
+        (b(8), 0),                         // Steam
+        (b(11), 1),                        // L4 -> left top grip
+        (b(proto::BTN_L5), 2),             // left bottom grip
+        (b(4), 3),                         // L1
+        (b(proto::BTN_RPAD_TOUCH), 5),
+        (b(proto::BTN_RPAD_CLICK), 6),
+        (tr == 32767, 7),                  // right trigger full pull
+    ]);
+    r[5] = 0x30; // constant flag bits seen on the real device
+    set(&mut r[5], &[
+        (b(proto::BTN_LPAD_TOUCH), 1),
+        (b(proto::BTN_LPAD_CLICK), 2),
+        (tl == 32767, 3),                  // left trigger full pull
+    ]);
+    let put = |r: &mut [u8], off: usize, v: i16| r[off..off + 2].copy_from_slice(&v.to_le_bytes());
+    put(&mut r, 6, tl);
+    put(&mut r, 8, tr);
+    // Sticks: the device reports "up is positive".
+    put(&mut r, 10, st.axes[0]);
+    put(&mut r, 12, st.axes[1].saturating_neg());
+    put(&mut r, 14, st.axes[3]);
+    put(&mut r, 16, st.axes[4].saturating_neg());
+    // Trackpads (already up-positive) and their pressure.
+    put(&mut r, 18, st.pads[0]);
+    put(&mut r, 20, st.pads[1]);
+    r[22..24].copy_from_slice(&st.pad_pressure[0].to_le_bytes());
+    put(&mut r, 24, st.pads[2]);
+    put(&mut r, 26, st.pads[3]);
+    r[28..30].copy_from_slice(&st.pad_pressure[1].to_le_bytes());
+    r[30..34].copy_from_slice(&ts_us.to_le_bytes());
+    // IMU: the real device lays accel/gyro out as X, Z, Y. The Deck's sensor
+    // uses the same units, so values are passed through.
+    for (i, v) in st.accel.iter().enumerate() {
+        put(&mut r, 34 + i * 2, *v);
     }
-    let mut b9 = 0u8;
-    for (on, bit) in [
-        (st.hat[1] < 0, 0), // up
-        (st.hat[0] > 0, 1), // right
-        (st.hat[0] < 0, 2), // left
-        (st.hat[1] > 0, 3), // down
-        (b(6), 4),          // View -> SELECT
-        (b(8), 5),          // Steam -> MODE
-        (b(7), 6),          // Menu -> START
-        (b(11), 7),         // L4 -> left grip
-    ] {
-        b9 |= (on as u8) << bit;
+    for (i, v) in st.gyro.iter().enumerate() {
+        put(&mut r, 40 + i * 2, *v);
     }
-    let mut b10 = 0u8;
-    for (on, bit) in [
-        (b(12), 0), // R4 -> right grip
-        (b(10), 2), // R3 -> right pad click
-        (b(9), 6),  // L3 -> joystick click
-    ] {
-        b10 |= (on as u8) << bit;
-    }
-    r[8] = b8;
-    r[9] = b9;
-    r[10] = b10;
-    r[11] = trig_l;
-    r[12] = trig_r;
-    // The kernel driver negates Y, so send "up is positive".
-    r[16..18].copy_from_slice(&st.axes[0].to_le_bytes());
-    r[18..20].copy_from_slice(&st.axes[1].saturating_neg().to_le_bytes());
-    r[20..22].copy_from_slice(&st.axes[3].to_le_bytes());
-    r[22..24].copy_from_slice(&st.axes[4].saturating_neg().to_le_bytes());
     r
 }
 
@@ -210,12 +240,21 @@ mod tests {
 
     #[test]
     fn report_layout() {
-        let st = State { buttons: 1 | 1 << 8, axes: [100, -200, 255, 0, 0, 0], hat: [1, 0] };
-        let r = state_report(7, &st);
-        assert_eq!(&r[0..4], &[1, 0, 1, 0x3c]);
-        assert_eq!(r[8] & 0x80, 0x80); // A
-        assert_eq!(r[9] & 0x22, 0x22); // dpad right + MODE
-        assert_eq!(r[11], 255);
-        assert_eq!(i16::from_le_bytes([r[18], r[19]]), 200);
+        let st = State { buttons: 1 | 1 << 8, axes: [100, -200, 255, 0, 0, 0], hat: [1, 0], pads: [7, -8, 0, 0], accel: [9, 0, 0], ..Default::default() };
+        let r = state_report(7, 0, &st);
+        assert_eq!(r[0], 0x42);
+        assert_eq!(r[2] & 1, 1); // A
+        assert_eq!(r[3] & 0x08, 0x08); // dpad right
+        assert_eq!(r[4] & 1, 1); // Steam
+        assert_eq!(i16::from_le_bytes([r[6], r[7]]), 32767); // left trigger
+        assert_eq!(r[5] & 0x08, 0x08); // left trigger full pull
+        assert_eq!(i16::from_le_bytes([r[12], r[13]]), 200);
+        assert_eq!(i16::from_le_bytes([r[18], r[19]]), 7); // left pad X
+        assert_eq!(i16::from_le_bytes([r[34], r[35]]), 9); // accel
+    }
+
+    #[test]
+    fn descriptor_parses() {
+        assert_eq!(report_descriptor().len(), 372);
     }
 }

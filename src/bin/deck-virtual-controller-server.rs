@@ -38,7 +38,9 @@ impl Default for Config {
 #[derive(Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum ControllerType {
+    /// uinput Xbox 360 gamepad.
     Xbox,
+    /// Emulated 2026 Steam Controller (28de:1302) over /dev/uhid: buttons, sticks, trackpads, gyro.
     Steam,
 }
 
@@ -53,54 +55,22 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(kind: ControllerType) -> Layout {
+    /// Xbox 360 pad IDs so games/SDL apply their standard mapping.
+    fn xbox() -> Layout {
         let stick = AbsInfo::new(0, proto::STICK_MIN, proto::STICK_MAX, 16, 128, 0);
-        let hat = [proto::HAT_AXES[0], proto::HAT_AXES[1]];
-        match kind {
-            // Xbox 360 pad IDs so games/SDL apply their standard mapping.
-            ControllerType::Xbox => {
-                let trigger = AbsInfo::new(0, 0, proto::TRIGGER_MAX, 0, 0, 0);
-                let mut buttons = [None; proto::BUTTONS.len()];
-                for i in 0..proto::XBOX_BUTTONS {
-                    buttons[i] = Some(proto::BUTTONS[i]);
-                }
-                Layout {
-                    id: InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
-                    buttons,
-                    axes: [
-                        (0x00, stick), (0x01, stick), (0x02, trigger),
-                        (0x03, stick), (0x04, stick), (0x05, trigger),
-                    ],
-                    hat,
-                }
-            }
-            // Mirrors the Linux hid-steam driver's Steam Controller layout:
-            // triggers on ABS_HAT2Y/HAT2X (0..32767), L4/R4 as gear buttons.
-            ControllerType::Steam => {
-                let trigger = AbsInfo::new(0, 0, 32767, 0, 0, 0);
-                let mut buttons = [None; proto::BUTTONS.len()];
-                for (i, b) in buttons.iter_mut().enumerate() {
-                    *b = Some(proto::BUTTONS[i]);
-                }
-                Layout {
-                    id: InputId::new(BusType::BUS_USB, 0x28de, 0x1102, 0x0001),
-                    buttons,
-                    axes: [
-                        (0x00, stick), (0x01, stick), (0x15 /* HAT2Y: left trigger */, trigger),
-                        (0x03, stick), (0x04, stick), (0x14 /* HAT2X: right trigger */, trigger),
-                    ],
-                    hat,
-                }
-            }
+        let trigger = AbsInfo::new(0, 0, proto::TRIGGER_MAX, 0, 0, 0);
+        let mut buttons = [None; proto::BUTTONS.len()];
+        for i in 0..proto::XBOX_BUTTONS {
+            buttons[i] = Some(proto::BUTTONS[i]);
         }
-    }
-
-    /// Axis value as sent on the wire -> value for this device.
-    fn axis_value(&self, kind: ControllerType, i: usize, v: i16) -> i32 {
-        if kind == ControllerType::Steam && matches!(i, 2 | 5) {
-            v as i32 * 32767 / proto::TRIGGER_MAX
-        } else {
-            v as i32
+        Layout {
+            id: InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
+            buttons,
+            axes: [
+                (0x00, stick), (0x01, stick), (0x02, trigger),
+                (0x03, stick), (0x04, stick), (0x05, trigger),
+            ],
+            hat: [proto::HAT_AXES[0], proto::HAT_AXES[1]],
         }
     }
 }
@@ -122,7 +92,7 @@ fn build_device(name: &str, layout: &Layout) -> std::io::Result<VirtualDevice> {
 }
 
 /// Events for everything that differs between `old` and `new`.
-fn diff(layout: &Layout, kind: ControllerType, old: &proto::State, new: &proto::State) -> Vec<InputEvent> {
+fn diff(layout: &Layout, old: &proto::State, new: &proto::State) -> Vec<InputEvent> {
     let mut ev = Vec::new();
     for (bit, code) in layout.buttons.iter().enumerate() {
         let (o, n) = (old.buttons >> bit & 1, new.buttons >> bit & 1);
@@ -132,7 +102,7 @@ fn diff(layout: &Layout, kind: ControllerType, old: &proto::State, new: &proto::
     }
     for i in 0..6 {
         if old.axes[i] != new.axes[i] {
-            ev.push(InputEvent::new(EV_ABS, layout.axes[i].0, layout.axis_value(kind, i, new.axes[i])));
+            ev.push(InputEvent::new(EV_ABS, layout.axes[i].0, new.axes[i] as i32));
         }
     }
     for (i, &code) in layout.hat.iter().enumerate() {
@@ -149,7 +119,7 @@ fn main() {
         std::process::exit(2);
     });
 
-    let layout = Layout::new(cfg.controller_type);
+    let layout = Layout::xbox();
     // "steam" is a real (emulated) Steam Controller HID device; "xbox" is a uinput gamepad.
     let (mut pad, steam) = match cfg.controller_type {
         ControllerType::Xbox => (Some(build_device(&cfg.name, &layout)), None),
@@ -164,8 +134,12 @@ fn main() {
         std::process::exit(1);
     }
     let mut pad = pad.take().map(Result::unwrap);
-    let steam = steam.map(Result::unwrap);
-    let mut hid_seq = 0u32;
+    // The Steam Controller device streams the latest state continuously.
+    let shared_state = steam.map(|dev| {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(proto::State::default()));
+        dev.unwrap().stream(shared.clone(), Duration::from_millis(4));
+        shared
+    });
     let sock = UdpSocket::bind(&cfg.bind_addr).unwrap_or_else(|e| {
         eprintln!("cannot bind {}: {e}", cfg.bind_addr);
         std::process::exit(1);
@@ -202,17 +176,12 @@ fn main() {
                 continue;
             }
         };
-        if let Some(dev) = &steam {
-            if current != next {
-                hid_seq = hid_seq.wrapping_add(1);
-                if let Err(e) = dev.send_state(hid_seq, &next) {
-                    eprintln!("uhid write failed: {e}");
-                }
-                current = next;
-            }
+        if let Some(shared) = &shared_state {
+            *shared.lock().unwrap() = next;
+            current = next;
             continue;
         }
-        let events = diff(&layout, cfg.controller_type, &current, &next);
+        let events = diff(&layout, &current, &next);
         if !events.is_empty() {
             if let Err(e) = pad.as_mut().unwrap().emit(&events) {
                 eprintln!("emit failed: {e}");

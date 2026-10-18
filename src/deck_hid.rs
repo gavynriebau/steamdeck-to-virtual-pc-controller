@@ -4,13 +4,13 @@
 //! layout. Offsets follow the Deck report layout (as used by SDL) and were
 //! checked against the real hardware.
 
-use crate::proto::State;
+use crate::proto::{self, State};
 
 pub const REPORT_LEN: usize = 64;
 const HEADER: [u8; 4] = [0x01, 0x00, 0x09, 0x40];
 
 /// (bit in the 64-bit button field, bit in `State::buttons`)
-const BUTTON_MAP: [(u32, u16); 11] = [
+const BUTTON_MAP: [(u32, u32); 20] = [
     (7, 0),   // A
     (5, 1),   // B
     (6, 2),   // X
@@ -22,9 +22,16 @@ const BUTTON_MAP: [(u32, u16); 11] = [
     (13, 8),  // Steam
     (22, 9),  // L3
     (26, 10), // R3
+    (41, 11), // L4
+    (42, 12), // R4
+    (15, proto::BTN_L5),
+    (16, proto::BTN_R5),
+    (19, proto::BTN_LPAD_TOUCH),
+    (20, proto::BTN_RPAD_TOUCH),
+    (17, proto::BTN_LPAD_CLICK),
+    (18, proto::BTN_RPAD_CLICK),
+    (50, proto::BTN_QAM),
 ];
-const BIT_L4: u32 = 41;
-const BIT_R4: u32 = 42;
 const DPAD_UP: u32 = 8;
 const DPAD_RIGHT: u32 = 9;
 const DPAD_LEFT: u32 = 10;
@@ -32,6 +39,10 @@ const DPAD_DOWN: u32 = 11;
 
 fn i16_at(b: &[u8], off: usize) -> i16 {
     i16::from_le_bytes([b[off], b[off + 1]])
+}
+
+fn u16_at(b: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([b[off], b[off + 1]])
 }
 
 /// `-v` without overflowing at `i16::MIN`.
@@ -47,17 +58,11 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
     let bits = u64::from_le_bytes(b[8..16].try_into().ok()?);
     let on = |n: u32| bits >> n & 1 != 0;
 
-    let mut buttons = 0u16;
+    let mut buttons = 0u32;
     for (src, dst) in BUTTON_MAP {
         if on(src) {
             buttons |= 1 << dst;
         }
-    }
-    if on(BIT_L4) {
-        buttons |= 1 << 11;
-    }
-    if on(BIT_R4) {
-        buttons |= 1 << 12;
     }
 
     let trigger = |off| (i16_at(b, off).max(0) >> 7) as i16; // 0..32767 -> 0..255
@@ -74,7 +79,16 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
         on(DPAD_RIGHT) as i8 - on(DPAD_LEFT) as i8,
         on(DPAD_DOWN) as i8 - on(DPAD_UP) as i8,
     ];
-    Some(State { buttons, axes, hat })
+    let s16 = |off| i16_at(b, off);
+    Some(State {
+        buttons,
+        axes,
+        hat,
+        pads: [s16(16), s16(18), s16(20), s16(22)],
+        pad_pressure: [u16_at(b, 56), u16_at(b, 58)],
+        accel: [s16(24), s16(26), s16(28)],
+        gyro: [s16(30), s16(32), s16(34)],
+    })
 }
 
 /// hidraw nodes belonging to the Deck's built-in controller.
@@ -110,6 +124,7 @@ mod tests {
     fn buttons_hat_axes() {
         let s = parse_report(&report(1 << 7 | 1 << 41 | 1 << 8 | 1 << 10, 1000, 32767, 32767)).unwrap();
         assert_eq!(s.buttons, 1 | 1 << 11);
+        assert_eq!(s.pads, [0; 4]);
         assert_eq!(s.hat, [-1, -1]);
         assert_eq!(s.axes[0], 1000);
         assert_eq!(s.axes[1], -32767);
