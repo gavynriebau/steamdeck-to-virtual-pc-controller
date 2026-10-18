@@ -16,10 +16,25 @@ import sys
 import time
 import zlib
 
+def read_layout(path):
+    """KEY=VALUE pairs of deck-layout.env (comments and blank lines skipped)."""
+    layout = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                layout[key] = value
+    return layout
+
+
+# The Deck's file layout is defined once, in deck-layout.env next to this script.
+LAYOUT = read_layout(os.path.join(os.path.dirname(os.path.abspath(__file__)), "deck-layout.env"))
+
 NAME = "Deck Virtual Controller"
-BIN_DIR = os.path.expanduser("~/.local/bin")
-EXE = f'"{BIN_DIR}/deck-controller-app"'
-START = f'"{BIN_DIR}/"'
+BIN_DIR = os.path.expanduser("~/" + LAYOUT["DECK_BIN_DIR"])
+EXE = '"' + BIN_DIR + "/" + LAYOUT["DECK_APP"] + '"'
+START = '"' + BIN_DIR + '/"'
 STEAM_ROOTS = ["~/.local/share/Steam", "~/.steam/steam"]
 
 

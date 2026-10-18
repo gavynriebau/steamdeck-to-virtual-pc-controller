@@ -13,7 +13,8 @@ import tkinter as tk
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from deck_supervisor import Supervisor  # noqa: E402
 
-CLIENT = os.path.expanduser("~/.local/bin/deck-virtual-controller-client")
+# The client is installed next to this app.
+CLIENT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "deck-virtual-controller-client")
 COLORS = {"ok": "#6ee7a0", "warn": "#fbbf24", "error": "#f87171"}
 BG = "#0b1020"
 

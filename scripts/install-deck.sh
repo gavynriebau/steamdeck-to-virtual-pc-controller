@@ -44,6 +44,6 @@ sed "s/PC_ADDRESS/$PC/" "$ROOT/deploy/client/config.toml" |
 deck_ctl "$DECK" install-config "/tmp/$BIN-config.toml"
 
 # Add the Steam library entry (restarts Steam on the Deck so it picks it up).
-scp -q "$ROOT/deploy/add_steam_shortcut.py" "$DECK:/tmp/add_steam_shortcut.py"
+deck_copy_shortcut_tool "$DECK"
 ssh "$DECK" "python3 /tmp/add_steam_shortcut.py"
 echo "Done. Start 'Deck Virtual Controller' from the Steam library on the Deck."

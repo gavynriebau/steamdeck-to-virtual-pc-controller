@@ -14,6 +14,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-scp -q "$ROOT/deploy/add_steam_shortcut.py" "$DECK:/tmp/add_steam_shortcut.py"
+deck_copy_shortcut_tool "$DECK"
 ssh "$DECK" "python3 /tmp/add_steam_shortcut.py --remove"
 deck_ctl "$DECK" remove-files

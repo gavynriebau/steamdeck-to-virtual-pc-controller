@@ -155,7 +155,9 @@ The code is a Cargo workspace split along the Deck / PC seam; each side depends 
 | `crates/pc` | `session` (who we listen to), `serve` (one receive step), `sink` (+ `xbox_sink` and `steam_controller`: `identity`, `device`, `report`, over `uhid`); binary `deck-virtual-controller-server` |
 
 `steam_controller`'s tests compare against a report captured from a real controller, and `deck_hid`'s against one
-captured from a real Deck. The Deck app (`deck/`) talks to the client only through the lines and exit status described
+captured from a real Deck. Where things are installed on the Deck is defined once in `deploy/deck-layout.env`, read by the install scripts, the
+Deck-side helper and the Steam shortcut tool; `deploy/tests/test_layout.py` fails if anything else repeats it.
+The Deck app (`deck/`) talks to the client only through the lines and exit status described
 in `crates/deck/src/status.rs`; `contract/status_contract.txt` lists them and both the Rust and Python tests read it. Releases are built by GitHub Actions when a `v*` tag is pushed.
 
 ## License
