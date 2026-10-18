@@ -59,14 +59,16 @@ The Deck connects to UDP port 24800. If this PC has a firewall, open it, e.g.
     sudo firewall-cmd --permanent --add-port=24800/udp && sudo firewall-cmd --reload
 EOF
 
-if [[ -w /dev/uhid ]]; then
+# The device the server needs to write to (overridable for tests).
+UHID=${UHID_DEVICE:-/dev/uhid}
+if [[ -w $UHID ]]; then
     systemctl --user enable --now "$BIN"
     echo
     echo "Server running: systemctl --user status $BIN"
 else
     systemctl --user enable "$BIN"
     echo
-    echo "/dev/uhid is not writable yet, so the service was enabled but not started."
+    echo "$UHID is not writable yet, so the service was enabled but not started."
     echo "Run the root steps above (and re-login if you were added to 'input'), then:"
     echo "    systemctl --user start $BIN"
 fi
