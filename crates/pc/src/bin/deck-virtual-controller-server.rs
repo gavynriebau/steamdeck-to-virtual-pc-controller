@@ -4,7 +4,7 @@
 //! real virtual device and binds the socket.
 
 use dvc_common::info;
-use dvc_common::startup::{EXIT_ENV, die, load_config};
+use dvc_common::startup::{AppInfo, EXIT_ENV, die, load_config};
 use dvc_common::timing;
 use dvc_pc::config::{Config, ControllerType};
 use dvc_pc::run::{Timing, run_server};
@@ -14,7 +14,11 @@ use dvc_pc::xbox_sink::XboxSink;
 use std::net::UdpSocket;
 use std::sync::atomic::AtomicBool;
 
-const APP: &str = "deck-virtual-controller-server";
+const INFO: AppInfo = AppInfo {
+    name: "deck-virtual-controller-server",
+    version: env!("CARGO_PKG_VERSION"),
+    about: "Presents a Steam Deck's controls on this PC as a Steam Controller or an Xbox pad.",
+};
 
 fn open_sink(cfg: &Config) -> Box<dyn Sink> {
     match cfg.controller_type {
@@ -34,7 +38,7 @@ fn open_sink(cfg: &Config) -> Box<dyn Sink> {
 }
 
 fn main() {
-    let cfg: Config = load_config(APP);
+    let cfg: Config = load_config(&INFO);
 
     let mut sink = open_sink(&cfg);
     let sock = UdpSocket::bind(&cfg.bind_addr)

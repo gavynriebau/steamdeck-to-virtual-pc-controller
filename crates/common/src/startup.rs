@@ -10,6 +10,55 @@ pub const EXIT_CONFIG: i32 = 2;
 /// The environment refused something (permissions, port in use, ...).
 pub const EXIT_ENV: i32 = 1;
 
+/// What a program says about itself for `--help`, `--version` and its first log line.
+pub struct AppInfo {
+    pub name: &'static str,
+    /// The program's crate version (pass `env!("CARGO_PKG_VERSION")`).
+    pub version: &'static str,
+    /// One line on what it does.
+    pub about: &'static str,
+}
+
+impl AppInfo {
+    /// `deck-virtual-controller-client 0.1.0 (protocol 3)`: what a bug report should quote.
+    pub fn version_line(&self) -> String {
+        format!(
+            "{} {} (protocol {})",
+            self.name,
+            self.version,
+            char::from(crate::proto::VERSION)
+        )
+    }
+
+    pub fn help_text(&self) -> String {
+        let name = self.name;
+        format!(
+            "{}\n{}\n\n\
+             usage: {name} [--config <path>]\n       {name} --help | --version\n\n\
+             options:\n  \
+             --config <path>   read this config.toml instead of searching for one\n  \
+             -h, --help        show this help\n  \
+             -V, --version     show the version\n\n\
+             Without --config, the first of ./config.toml and ~/.config/{name}/config.toml is\n\
+             used; with neither, the built-in defaults apply.",
+            self.version_line(),
+            self.about
+        )
+    }
+
+    /// The text to print and exit 0 for, if `args` ask for `--help` or `--version`.
+    pub fn standard_flag_output(&self, args: &[String]) -> Option<String> {
+        for arg in args {
+            match arg.as_str() {
+                "-h" | "--help" => return Some(self.help_text()),
+                "-V" | "--version" => return Some(self.version_line()),
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
 /// Print `msg` and exit with `code`.
 pub fn die(code: i32, msg: &str) -> ! {
     crate::error!("{msg}");
@@ -34,16 +83,23 @@ pub fn load_config_from<T: DeserializeOwned + Default + Validate>(
 
 /// Like [`load_config`], but hands the problem back instead of exiting, for a
 /// program that wants to report it before it goes (the Deck client tells the
-/// Deck app).
-pub fn try_load_config<T: DeserializeOwned + Default + Validate>(app: &str) -> Result<T, String> {
+/// Deck app). `--help` and `--version` still print and exit 0.
+pub fn try_load_config<T: DeserializeOwned + Default + Validate>(
+    info: &AppInfo,
+) -> Result<T, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    load_config_from(app, &args, &config::default_search(app))
+    if let Some(text) = info.standard_flag_output(&args) {
+        println!("{text}");
+        std::process::exit(0);
+    }
+    crate::info!("{}", info.version_line());
+    load_config_from(info.name, &args, &config::default_search(info.name))
 }
 
-/// Load `config.toml` for `app` from the command line and the default search
-/// path, validate it, and exit with [`EXIT_CONFIG`] on any problem.
-pub fn load_config<T: DeserializeOwned + Default + Validate>(app: &str) -> T {
-    try_load_config(app).unwrap_or_else(|e| die(EXIT_CONFIG, &e))
+/// Load `config.toml` for the program from the command line and the default
+/// search path, validate it, and exit with [`EXIT_CONFIG`] on any problem.
+pub fn load_config<T: DeserializeOwned + Default + Validate>(info: &AppInfo) -> T {
+    try_load_config(info).unwrap_or_else(|e| die(EXIT_CONFIG, &e))
 }
 
 #[cfg(test)]
@@ -121,5 +177,65 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("/nonexistent/c.toml"), "{e}");
+    }
+
+    const INFO: AppInfo = AppInfo {
+        name: "demo-app",
+        version: "1.2.3",
+        about: "Does demonstrations.",
+    };
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_version_line_has_the_name_the_version_and_the_protocol() {
+        assert_eq!(
+            INFO.version_line(),
+            format!(
+                "demo-app 1.2.3 (protocol {})",
+                char::from(crate::proto::VERSION)
+            )
+        );
+    }
+
+    #[test]
+    fn the_standard_flags_produce_text_to_print() {
+        for flag in ["--version", "-V"] {
+            assert_eq!(
+                INFO.standard_flag_output(&args(&[flag])),
+                Some(INFO.version_line())
+            );
+        }
+        for flag in ["--help", "-h"] {
+            let help = INFO.standard_flag_output(&args(&[flag])).unwrap();
+            assert!(help.contains("usage: demo-app [--config <path>]"), "{help}");
+            assert!(
+                help.contains("--version") && help.contains("Does demonstrations."),
+                "{help}"
+            );
+            assert!(help.contains("~/.config/demo-app/config.toml"), "{help}");
+            assert!(
+                help.starts_with("demo-app 1.2.3"),
+                "the help leads with the version"
+            );
+        }
+    }
+
+    #[test]
+    fn other_arguments_are_not_standard_flags() {
+        assert_eq!(INFO.standard_flag_output(&args(&[])), None);
+        assert_eq!(
+            INFO.standard_flag_output(&args(&["--config", "x.toml"])),
+            None
+        );
+        assert_eq!(INFO.standard_flag_output(&args(&["--bogus"])), None);
+    }
+
+    #[test]
+    fn a_standard_flag_wins_even_after_other_arguments() {
+        let out = INFO.standard_flag_output(&args(&["--config", "x.toml", "--version"]));
+        assert_eq!(out, Some(INFO.version_line()));
     }
 }

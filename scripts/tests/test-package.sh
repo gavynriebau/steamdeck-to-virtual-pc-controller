@@ -15,7 +15,7 @@ for b in deck-virtual-controller-client deck-virtual-controller-server; do
 done
 
 # 1. Packaging produces the tarball and a checksum that verifies.
-tarball=$("$here/scripts/package.sh" v9.9.9 --bin-dir "$tmp/bins" --out "$tmp/out")
+tarball=$("$here/scripts/package.sh" v9.9.9 --bin-dir "$tmp/bins" --out "$tmp/out" --no-version-check)
 [ "$tarball" = "$tmp/out/deck-virtual-controller-v9.9.9-x86_64-linux.tar.gz" ] || fail "unexpected tarball path: $tarball"
 (cd "$tmp/out" && sha256sum -c ./*.sha256 >/dev/null) || fail "checksum does not verify"
 echo "ok: tarball and checksum"
@@ -78,6 +78,18 @@ echo "ok: install-pc.sh runs from the tarball"
 echo "ok: install-deck.sh runs from the tarball"
 
 # 7. Missing binaries and a missing version are errors, not empty packages.
-if "$here/scripts/package.sh" v1 --bin-dir "$tmp/nowhere" --out "$tmp/o2" >/dev/null 2>&1; then fail "packaged without binaries"; fi
+if "$here/scripts/package.sh" v1 --bin-dir "$tmp/nowhere" --out "$tmp/o2" --no-version-check >/dev/null 2>&1; then fail "packaged without binaries"; fi
 if "$here/scripts/package.sh" >/dev/null 2>&1; then fail "packaged without a version"; fi
 echo "ok: refuses to package without binaries or a version"
+
+# 8. The release version must match the version the binaries report.
+crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$here/Cargo.toml" | head -1)
+[ -n "$crate_version" ] || fail "no version found in Cargo.toml"
+for good in "v$crate_version" "$crate_version"; do
+    "$here/scripts/package.sh" "$good" --bin-dir "$tmp/bins" --out "$tmp/o3" >/dev/null 2>&1 || fail "refused the matching version $good"
+done
+if msg=$("$here/scripts/package.sh" v99.0.0 --bin-dir "$tmp/bins" --out "$tmp/o4" 2>&1); then
+    fail "packaged a tag that does not match Cargo's version"
+fi
+grep -q "v99.0.0" <<< "$msg" && grep -q "$crate_version" <<< "$msg" || fail "the refusal does not name both versions: $msg"
+echo "ok: a release version that disagrees with Cargo's is refused"

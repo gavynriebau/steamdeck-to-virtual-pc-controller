@@ -52,7 +52,7 @@ pub fn load_from<T: DeserializeOwned + Default>(
             }
             other => {
                 return Err(format!(
-                    "unknown argument '{other}' (usage: {app} [--config <path>])"
+                    "unknown argument '{other}' (usage: {app} [--config <path>]; try --help)"
                 ));
             }
         }

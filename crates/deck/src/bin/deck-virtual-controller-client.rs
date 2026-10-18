@@ -5,7 +5,7 @@
 //! (a `status fatal=` line), because the Deck screen cannot see the log.
 
 use dvc_common::info;
-use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, try_load_config};
+use dvc_common::startup::{AppInfo, EXIT_CONFIG, EXIT_ENV, die, try_load_config};
 use dvc_deck::config::{Config, Source};
 use dvc_deck::deck_hid::HidrawDiscovery;
 use dvc_deck::evdev_source::EvdevDiscovery;
@@ -15,7 +15,11 @@ use dvc_deck::source::Discovery;
 use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
 use std::net::UdpSocket;
 
-const APP: &str = "deck-virtual-controller-client";
+const INFO: AppInfo = AppInfo {
+    name: "deck-virtual-controller-client",
+    version: env!("CARGO_PKG_VERSION"),
+    about: "Streams this Steam Deck's controls to a PC running deck-virtual-controller-server.",
+};
 
 /// Report `why` to the Deck app, then log it and exit with `code`.
 fn fatal(code: i32, why: &str) -> ! {
@@ -24,7 +28,7 @@ fn fatal(code: i32, why: &str) -> ! {
 }
 
 fn main() {
-    let cfg: Config = try_load_config(APP).unwrap_or_else(|e| fatal(EXIT_CONFIG, &e));
+    let cfg: Config = try_load_config(&INFO).unwrap_or_else(|e| fatal(EXIT_CONFIG, &e));
 
     let sock = UdpSocket::bind("0.0.0.0:0")
         .unwrap_or_else(|e| fatal(EXIT_ENV, &format!("cannot create UDP socket: {e}")));

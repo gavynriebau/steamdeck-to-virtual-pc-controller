@@ -134,6 +134,13 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
   use it (Xbox type, or the host switched the gyro off) the Deck stops sending motion data and an idle Deck sends
   only its 10 per second heartbeat.
 
+## Releasing
+
+Bump `[workspace.package] version` in `Cargo.toml` (it is what `--version` prints and what shows in the first log
+line), commit, and push a tag `vX.Y.Z` with the same number: the release workflow builds and attaches the tarball,
+and `scripts/package.sh` refuses a tag that disagrees with the crate version. Both programs also print the
+protocol version; the Deck and the PC must run builds with the same one.
+
 ## Uninstall
 
 ```sh

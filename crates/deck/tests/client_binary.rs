@@ -74,3 +74,66 @@ fn a_fatal_line_is_the_only_status_a_config_failure_prints() {
         .collect();
     assert_eq!(statuses.len(), 1, "{statuses:?}");
 }
+
+fn run_with_args(args: &[&str]) -> Output {
+    Command::new(CLIENT)
+        .args(args)
+        .output()
+        .expect("run the client")
+}
+
+#[test]
+fn version_prints_the_name_version_and_protocol_and_exits_0() {
+    for flag in ["--version", "-V"] {
+        let out = run_with_args(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(
+            stdout(&out).trim(),
+            format!(
+                "deck-virtual-controller-client {} (protocol {})",
+                env!("CARGO_PKG_VERSION"),
+                char::from(dvc_common::proto::VERSION)
+            )
+        );
+    }
+}
+
+#[test]
+fn help_describes_the_options_and_exits_0() {
+    for flag in ["--help", "-h"] {
+        let out = run_with_args(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        let text = stdout(&out);
+        assert!(
+            text.contains("usage: deck-virtual-controller-client [--config <path>]"),
+            "{text}"
+        );
+        assert!(text.contains("--version"), "{text}");
+    }
+}
+
+#[test]
+fn an_unknown_flag_is_exit_2_and_points_at_help() {
+    let out = run_with_args(&["--bogus"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--bogus") && stderr.contains("--help"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn the_first_log_line_names_the_version_so_a_bug_report_can_quote_it() {
+    let out = run_with_config("server_addr = \"PC_ADDRESS:24800\"\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let first = stderr.lines().next().unwrap_or("");
+    assert_eq!(
+        first,
+        format!(
+            "deck-virtual-controller-client {} (protocol {})",
+            env!("CARGO_PKG_VERSION"),
+            char::from(dvc_common::proto::VERSION)
+        )
+    );
+}
