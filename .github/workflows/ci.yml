@@ -39,7 +39,7 @@ jobs:
       - name: Release packaging tests
         run: scripts/tests/test-package.sh
       - name: Python syntax
-        run: python3 -m py_compile deck/deck-controller-app.py deck/deck_supervisor.py deploy/add_steam_shortcut.py
+        run: python3 -m py_compile deck/deck-controller-app.py deck/deck_supervisor.py deploy/add_steam_shortcut.py deploy/steam_vdf.py
       - name: Steam shortcut tests
         run: python3 -m unittest discover -s deploy/tests -v
       - name: Deck supervisor tests

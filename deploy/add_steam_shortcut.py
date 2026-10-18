@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Add (or remove) the Deck Virtual Controller entry in Steam's library.
 
-Run on the Steam Deck. Steam only reads shortcuts.vdf at startup and rewrites
-it on exit, so this shuts Steam down first (Game Mode relaunches it), backs
-each file up, then edits it. Does nothing if there is nothing to change.
+Run on the Steam Deck. The file format lives in steam_vdf.py; this holds what a
+shortcut entry is, how Steam is stopped and the command line. Steam only reads
+shortcuts.vdf at startup and rewrites it on exit, so this shuts Steam down first
+(Game Mode relaunches it), backs each file up, then edits it. Does nothing if
+there is nothing to change.
 
     add_steam_shortcut.py            add the entry for every Steam user
     add_steam_shortcut.py --remove   remove it again
@@ -15,6 +17,10 @@ import subprocess
 import sys
 import time
 import zlib
+
+# The script's own directory holds steam_vdf.py, whichever way it was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import steam_vdf  # noqa: E402
 
 def read_layout(path):
     """KEY=VALUE pairs of deck-layout.env (comments and blank lines skipped)."""
@@ -36,46 +42,6 @@ BIN_DIR = os.path.expanduser("~/" + LAYOUT["DECK_BIN_DIR"])
 EXE = '"' + BIN_DIR + "/" + LAYOUT["DECK_APP"] + '"'
 START = '"' + BIN_DIR + '/"'
 STEAM_ROOTS = ["~/.local/share/Steam", "~/.steam/steam"]
-
-
-# --- minimal binary VDF (keyvalues) reader/writer that round-trips byte for byte.
-# A node is a list of (type, key, value); type is 0 (section), 1 (string) or 2 (int).
-
-def parse(data, pos=0):
-    items = []
-    while True:
-        kind = data[pos]
-        pos += 1
-        if kind == 8:
-            return items, pos
-        end = data.index(b"\x00", pos)
-        key = data[pos:end].decode("utf-8")
-        pos = end + 1
-        if kind == 0:
-            value, pos = parse(data, pos)
-        elif kind == 1:
-            end = data.index(b"\x00", pos)
-            value = data[pos:end].decode("utf-8")
-            pos = end + 1
-        elif kind == 2:
-            value = int.from_bytes(data[pos:pos + 4], "little")
-            pos += 4
-        else:
-            raise ValueError(f"unsupported VDF value type {kind} at {pos}")
-        items.append((kind, key, value))
-
-
-def serialize(items):
-    out = bytearray()
-    for kind, key, value in items:
-        out += bytes([kind]) + key.encode("utf-8") + b"\x00"
-        if kind == 0:
-            out += serialize(value)
-        elif kind == 1:
-            out += value.encode("utf-8") + b"\x00"
-        else:
-            out += value.to_bytes(4, "little")
-    return bytes(out) + b"\x08"
 
 
 def new_entry(index):
@@ -128,31 +94,54 @@ def edit(items, remove):
     return items[:i] + [updated] + items[i + 1:]
 
 
-def steam_running():
-    return subprocess.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
+class SteamProcess:
+    """The running Steam client, as far as this tool needs it. `run` and `sleep`
+    are injectable so the shutdown logic can be tested without a Steam."""
 
+    def __init__(self, roots=STEAM_ROOTS, run=subprocess.run, sleep=time.sleep, wait_seconds=60):
+        self.roots = roots
+        self.run = run
+        self.sleep = sleep
+        self.wait_seconds = wait_seconds
 
-def shutdown_steam():
-    if not steam_running():
-        return
-    print("shutting Steam down...")
-    for root in STEAM_ROOTS:
-        binary = os.path.join(os.path.expanduser(root), "ubuntu12_32", "steam")
-        if os.path.exists(binary):
-            subprocess.run([binary, "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            break
-    for _ in range(60):
-        if not steam_running():
+    def is_running(self):
+        return self.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
+
+    def shutdown(self):
+        """Ask Steam to quit and wait for it to; exit if it will not."""
+        if not self.is_running():
             return
-        time.sleep(1)
-    raise SystemExit("Steam did not exit; nothing changed")
+        print("shutting Steam down...")
+        for root in self.roots:
+            binary = os.path.join(os.path.expanduser(root), "ubuntu12_32", "steam")
+            if os.path.exists(binary):
+                self.run([binary, "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                break
+        for _ in range(self.wait_seconds):
+            if not self.is_running():
+                return
+            self.sleep(1)
+        raise SystemExit("Steam did not exit; nothing changed")
 
 
-def main():
-    remove = "--remove" in sys.argv[1:]
+def find_shortcut_files(roots):
+    """Every user's shortcuts.vdf under the Steam roots (real paths, deduplicated)."""
     paths = set()
-    for root in STEAM_ROOTS:
-        paths.update(os.path.realpath(p) for p in glob.glob(os.path.join(os.path.expanduser(root), "userdata/*/config/shortcuts.vdf")))
+    for root in roots:
+        pattern = os.path.join(os.path.expanduser(root), "userdata/*/config/shortcuts.vdf")
+        paths.update(os.path.realpath(p) for p in glob.glob(pattern))
+    return sorted(paths)
+
+
+def main(argv=None, steam=None, roots=None, stamp=None):
+    """Add (or with --remove, remove) the entry in every user's shortcuts.vdf.
+
+    `steam` (a SteamProcess), `roots` and `stamp` (the backup suffix) can be
+    replaced by tests."""
+    remove = "--remove" in (sys.argv[1:] if argv is None else argv)
+    steam = steam or SteamProcess()
+    roots = STEAM_ROOTS if roots is None else roots
+    paths = find_shortcut_files(roots)
     if not paths:
         if remove:
             print("no shortcuts.vdf found; nothing to remove")
@@ -161,22 +150,23 @@ def main():
 
     # Work out every change before touching Steam, so a no-op leaves it running.
     changes = {}
-    for path in sorted(paths):
+    for path in paths:
         with open(path, "rb") as f:
             data = f.read()
-        items, end = parse(data)
+        items, end = steam_vdf.parse(data)
         if end != len(data):
             raise SystemExit(f"{path}: unexpected trailing data; nothing changed")
         updated = edit(items, remove)
         if updated is not None:
-            changes[path] = serialize(updated)
+            changes[path] = steam_vdf.serialize(updated)
     if not changes:
         print("shortcut already removed" if remove else "shortcut already present")
         return
 
-    shutdown_steam()
+    steam.shutdown()
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     for path, new_data in changes.items():
-        backup = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+        backup = f"{path}.bak-{stamp}"
         shutil.copy2(path, backup)
         with open(path, "wb") as f:
             f.write(new_data)

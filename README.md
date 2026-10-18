@@ -143,7 +143,7 @@ scripts/uninstall-pc.sh                        # config is kept; it lists the ro
 ```sh
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 cargo build --release --target x86_64-unknown-linux-musl   # static binaries for the Deck
-python3 -m unittest discover -s deploy/tests               # Steam shortcut file tests
+python3 -m unittest discover -s deploy/tests               # Steam VDF format, shortcut tool, layout
 python3 -m unittest discover -s deck/tests                 # Deck app supervisor tests
 scripts/tests/test-deck-ctl.sh                             # Deck-side helper script
 scripts/tests/test-install-pc.sh                           # PC installer (fake HOME and systemctl)

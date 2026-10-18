@@ -25,7 +25,7 @@ mkdir -p "$tmp/unpacked"
 tar -C "$tmp/unpacked" -xzf "$tarball"
 tree=$tmp/unpacked/deck-virtual-controller-v9.9.9-x86_64-linux
 for f in bin/deck-virtual-controller-client bin/deck-virtual-controller-server \
-         deploy/deck-layout.env deploy/deck-ctl.sh deploy/add_steam_shortcut.py \
+         deploy/deck-layout.env deploy/deck-ctl.sh deploy/add_steam_shortcut.py deploy/steam_vdf.py \
          deploy/deck-virtual-controller-client.desktop deploy/deck-virtual-controller-server.service \
          deploy/client/config.toml deploy/server/config.toml \
          deploy/server/70-deck-virtual-controller.rules deploy/server/deck-virtual-controller.conf \

@@ -19,10 +19,10 @@ deck_ctl() {
     cat "$DECK_LAYOUT" "$ROOT/deploy/deck-ctl.sh" | ssh "$deck" "sh -s -- $*"
 }
 
-# Copy the Steam shortcut tool, with the layout it reads, to the Deck's /tmp.
+# Copy the Steam shortcut tool, its format module and the layout it reads, to the Deck's /tmp.
 deck_copy_shortcut_tool() {
     local deck=$1
-    scp -q "$ROOT/deploy/add_steam_shortcut.py" "$DECK_LAYOUT" "$deck:/tmp/"
+    scp -q "$ROOT/deploy/add_steam_shortcut.py" "$ROOT/deploy/steam_vdf.py" "$DECK_LAYOUT" "$deck:/tmp/"
 }
 
 # Copy the files the Deck needs. usage: deck_copy_files <deck> <client binary>
