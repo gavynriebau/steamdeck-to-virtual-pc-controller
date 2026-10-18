@@ -137,6 +137,7 @@ scripts/uninstall-pc.sh                        # config is kept; it lists the ro
 ```sh
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 cargo build --release --target x86_64-unknown-linux-musl   # static binaries for the Deck
+python3 -m unittest discover -s deploy/tests               # Steam shortcut file tests
 ```
 
 `src/proto.rs` is the wire format, `src/deck_hid.rs` parses the Deck's HID reports, `src/uhid.rs` is the Steam
