@@ -14,6 +14,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+deck_connect "$DECK"
 deck_copy_shortcut_tool "$DECK"
-ssh "$DECK" "python3 /tmp/add_steam_shortcut.py --remove"
+deck_ssh "$DECK" "python3 /tmp/add_steam_shortcut.py --remove"
 deck_ctl "$DECK" remove-files

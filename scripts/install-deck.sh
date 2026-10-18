@@ -33,6 +33,7 @@ echo "Deck: $DECK   PC: $PC"
 
 client=$(get_binary "$BIN" x86_64-unknown-linux-musl)
 
+deck_connect "$DECK"
 deck_ctl "$DECK" make-dirs
 # Anything still running would make the binary busy ("Text file busy").
 deck_ctl "$DECK" stop
@@ -40,10 +41,10 @@ deck_copy_files "$DECK" "$client"
 
 # Keep an existing config; otherwise install the default pointed at the PC.
 sed "s/PC_ADDRESS/$PC/" "$ROOT/deploy/client/config.toml" |
-    ssh "$DECK" "cat > /tmp/$BIN-config.toml"
+    deck_ssh "$DECK" "cat > /tmp/$BIN-config.toml"
 deck_ctl "$DECK" install-config "/tmp/$BIN-config.toml"
 
 # Add the Steam library entry (restarts Steam on the Deck so it picks it up).
 deck_copy_shortcut_tool "$DECK"
-ssh "$DECK" "python3 /tmp/add_steam_shortcut.py"
+deck_ssh "$DECK" "python3 /tmp/add_steam_shortcut.py"
 echo "Done. Start 'Deck Virtual Controller' from the Steam library on the Deck."

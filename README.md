@@ -48,7 +48,8 @@ Get the code (clone this repo, or download and extract a release tarball from th
    scripts/install-deck.sh --deck me@192.168.1.50 --pc 192.168.1.20
    ```
 
-   This restarts Steam on the Deck once, to pick up the new library entry (existing entries are untouched and
+   It opens one SSH connection and reuses it for every step, so you are asked for a password (if you use one) only
+   once. This restarts Steam on the Deck once, to pick up the new library entry (existing entries are untouched and
    `shortcuts.vdf` is backed up first).
 
 3. On the Deck, switch to Game Mode and start **Deck Virtual Controller** from the library (Non-Steam).
