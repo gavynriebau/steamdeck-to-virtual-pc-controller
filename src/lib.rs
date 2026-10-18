@@ -4,3 +4,4 @@
 pub mod config;
 pub mod deck_hid;
 pub mod proto;
+pub mod uhid;

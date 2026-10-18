@@ -6,7 +6,7 @@ use evdev::{AbsInfo, AttributeSet, BusType, InputEvent, InputId, KeyCode, Uinput
 use serde::Deserialize;
 use std::net::UdpSocket;
 use std::time::Duration;
-use steamdeck_as_pc_controller::{config, proto};
+use steamdeck_as_pc_controller::{config, proto, uhid};
 
 const APP: &str = "deck-virtual-controller-server";
 const EV_KEY: u16 = 1;
@@ -150,10 +150,22 @@ fn main() {
     });
 
     let layout = Layout::new(cfg.controller_type);
-    let mut pad = build_device(&cfg.name, &layout).unwrap_or_else(|e| {
+    // "steam" is a real (emulated) Steam Controller HID device; "xbox" is a uinput gamepad.
+    let (mut pad, steam) = match cfg.controller_type {
+        ControllerType::Xbox => (Some(build_device(&cfg.name, &layout)), None),
+        ControllerType::Steam => (None, Some(uhid::SteamControllerDevice::create(&cfg.name))),
+    };
+    if let Some(Err(e)) = &pad {
         eprintln!("cannot create uinput device: {e} (need write access to /dev/uinput)");
         std::process::exit(1);
-    });
+    }
+    if let Some(Err(e)) = &steam {
+        eprintln!("cannot create uhid device: {e} (need write access to /dev/uhid)");
+        std::process::exit(1);
+    }
+    let mut pad = pad.take().map(Result::unwrap);
+    let steam = steam.map(Result::unwrap);
+    let mut hid_seq = 0u32;
     let sock = UdpSocket::bind(&cfg.bind_addr).unwrap_or_else(|e| {
         eprintln!("cannot bind {}: {e}", cfg.bind_addr);
         std::process::exit(1);
@@ -190,9 +202,19 @@ fn main() {
                 continue;
             }
         };
+        if let Some(dev) = &steam {
+            if current != next {
+                hid_seq = hid_seq.wrapping_add(1);
+                if let Err(e) = dev.send_state(hid_seq, &next) {
+                    eprintln!("uhid write failed: {e}");
+                }
+                current = next;
+            }
+            continue;
+        }
         let events = diff(&layout, cfg.controller_type, &current, &next);
         if !events.is_empty() {
-            if let Err(e) = pad.emit(&events) {
+            if let Err(e) = pad.as_mut().unwrap().emit(&events) {
                 eprintln!("emit failed: {e}");
             }
             current = next;
