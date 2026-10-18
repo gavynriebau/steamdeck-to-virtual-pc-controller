@@ -170,7 +170,8 @@ The code is a Cargo workspace split along the Deck / PC seam; each side depends 
 | `crates/e2e` | test-only: runs the real client wiring (`dvc_deck::run`) against the real server wiring (`dvc_pc::run`) over loopback UDP with a fake Deck and a recording sink; the only crate that links both sides |
 | `crates/pc` | `session` (who we listen to), `serve` (one receive step), `sink` (+ `xbox_sink` and `steam_controller`: `identity`, `device`, `report`, over `uhid`); binary `deck-virtual-controller-server` |
 
-`steam_controller`'s tests compare against a report captured from a real controller, and `deck_hid`'s against one
+`steam_controller`'s tests compare against a report captured from a real controller and drive the whole device over
+a fake kernel (a socket pair standing in for `/dev/uhid`), so CI needs no real device, and `deck_hid`'s against one
 captured from a real Deck. Where things are installed on the Deck is defined once in `deploy/deck-layout.env`, read by the install scripts, the
 Deck-side helper and the Steam shortcut tool; `deploy/tests/test_layout.py` fails if anything else repeats it.
 The Deck app (`deck/`) talks to the client only through the lines and exit status described
