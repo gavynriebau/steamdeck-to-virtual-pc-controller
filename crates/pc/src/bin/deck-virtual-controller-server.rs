@@ -1,16 +1,18 @@
 //! Runs on the PC: receives controller state over UDP and presents it as an
 //! emulated Steam Controller (via /dev/uhid) or an Xbox pad (via /dev/uinput).
+//! The receive loop lives in `dvc_pc::run`; this reads the config, creates the
+//! real virtual device and binds the socket.
 
+use dvc_common::info;
 use dvc_common::startup::{EXIT_ENV, die, load_config};
 use dvc_common::timing;
-use dvc_common::{info, warn};
 use dvc_pc::config::{Config, ControllerType};
-use dvc_pc::serve::{Acker, Event, serve_once};
-use dvc_pc::session::Session;
+use dvc_pc::run::{Timing, run_server};
 use dvc_pc::sink::Sink;
 use dvc_pc::steam_controller::SteamSink;
 use dvc_pc::xbox_sink::XboxSink;
 use std::net::UdpSocket;
+use std::sync::atomic::AtomicBool;
 
 const APP: &str = "deck-virtual-controller-server";
 
@@ -37,32 +39,18 @@ fn main() {
     let mut sink = open_sink(&cfg);
     let sock = UdpSocket::bind(&cfg.bind_addr)
         .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot bind {}: {e}", cfg.bind_addr)));
-    sock.set_read_timeout(Some(cfg.silence_timeout()))
-        .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot set socket timeout: {e}")));
     info!(
         "listening on {}, virtual device '{}'",
         cfg.bind_addr, cfg.name
     );
 
-    let mut session = Session::new();
-    let mut acker = Acker::new(timing::ACK_INTERVAL);
-    loop {
-        match serve_once(&sock, &mut session, sink.as_mut(), &mut acker) {
-            Event::Connected(from) => info!("client connected: {from}"),
-            Event::Rejected { from, reason } => {
-                warn!("ignoring packets from {from}: {reason}")
-            }
-            Event::TimedOut {
-                was_connected: true,
-            } => {
-                info!("client timed out, releasing inputs")
-            }
-            Event::RecvError(e) => warn!("recv error: {e}"),
-            Event::Applied
-            | Event::Heartbeat
-            | Event::Stale
-            | Event::RejectedAgain
-            | Event::TimedOut { .. } => {}
-        }
+    let timing = Timing {
+        silence_timeout: cfg.silence_timeout(),
+        ack_interval: timing::ACK_INTERVAL,
+    };
+    // Nothing ever sets this: the server runs until it is killed.
+    let never = AtomicBool::new(false);
+    if let Err(e) = run_server(&sock, sink.as_mut(), &timing, &never) {
+        die(EXIT_ENV, &format!("the server stopped: {e}"));
     }
 }

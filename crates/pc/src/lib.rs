@@ -2,6 +2,7 @@
 //! emulated Steam Controller or an Xbox pad.
 
 pub mod config;
+pub mod run;
 pub mod serve;
 pub mod session;
 pub mod sink;

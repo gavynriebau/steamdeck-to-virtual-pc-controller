@@ -51,6 +51,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dvc-e2e"
+version = "0.1.0"
+dependencies = [
+ "dvc-common",
+ "dvc-deck",
+ "dvc-pc",
+]
+
+[[package]]
 name = "dvc-pc"
 version = "0.1.0"
 dependencies = [

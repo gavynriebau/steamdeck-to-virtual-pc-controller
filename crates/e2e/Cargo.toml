@@ -1,0 +1,15 @@
+[package]
+name = "dvc-e2e"
+description = "End-to-end tests: the real Deck client wiring against the real PC server wiring over loopback UDP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The Deck and PC crates must not depend on each other; this test-only crate is
+# the one place that links both.
+[dev-dependencies]
+dvc-common.workspace = true
+dvc-deck = { path = "../deck" }
+dvc-pc = { path = "../pc" }
