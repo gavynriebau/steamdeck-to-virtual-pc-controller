@@ -3,11 +3,13 @@
 //! This is the whole interface between the two processes:
 //!
 //! * **stdout** carries one line per status change, `status <key>=<value>`:
-//!   `target=<host:port>`, `controller=ok|missing`, `server=reachable|unreachable|incompatible`.
+//!   `target=<host:port>`, `controller=ok|missing`, `server=reachable|unreachable|incompatible`,
+//!   and `fatal=<why>` as the very last line before the client exits with an error.
 //!   Anything else on stdout is ignored. Human-readable logs go to stderr.
 //! * **Exit status** [`EXIT_STOPPED_BY_USER`] (0) means the user pressed
-//!   View + Menu and the app should close too. Any other status is a failure and
-//!   the app restarts the client.
+//!   View + Menu and the app should close too. [`dvc_common::startup::EXIT_CONFIG`]
+//!   (2) means something the user must fix (restarting cannot help); any other
+//!   status is a failure the app retries.
 //!
 //! The Deck app (`deck/deck_supervisor.py`) is the other side of this contract.
 
@@ -36,6 +38,8 @@ pub enum Status {
     Controller(bool),
     /// Whether the server's acks are arriving, and speak our protocol version.
     Server(ServerLink),
+    /// The client is about to exit because of this problem (always the last line).
+    Fatal(String),
 }
 
 impl fmt::Display for Status {
@@ -47,11 +51,19 @@ impl fmt::Display for Status {
             Status::Server(ServerLink::Reachable) => write!(f, "status server=reachable"),
             Status::Server(ServerLink::Unreachable) => write!(f, "status server=unreachable"),
             Status::Server(ServerLink::Incompatible) => write!(f, "status server=incompatible"),
+            Status::Fatal(why) => write!(f, "status fatal={why}"),
         }
     }
 }
 
 impl Status {
+    /// The problem that is ending the client, as one line: a status is one line
+    /// of stdout, so line breaks in `why` become spaces.
+    pub fn fatal(why: &str) -> Status {
+        let one_line: Vec<&str> = why.split_whitespace().collect();
+        Status::Fatal(one_line.join(" "))
+    }
+
     /// The status as the `(key, value)` pair on its line.
     pub fn key_value(&self) -> (&'static str, String) {
         match self {
@@ -61,6 +73,7 @@ impl Status {
             Status::Server(ServerLink::Reachable) => ("server", "reachable".into()),
             Status::Server(ServerLink::Unreachable) => ("server", "unreachable".into()),
             Status::Server(ServerLink::Incompatible) => ("server", "incompatible".into()),
+            Status::Fatal(why) => ("fatal", why.clone()),
         }
     }
 
@@ -74,6 +87,7 @@ impl Status {
             ("server", "reachable") => Some(Status::Server(ServerLink::Reachable)),
             ("server", "unreachable") => Some(Status::Server(ServerLink::Unreachable)),
             ("server", "incompatible") => Some(Status::Server(ServerLink::Incompatible)),
+            ("fatal", why) if !why.is_empty() => Some(Status::Fatal(why.to_string())),
             _ => None,
         }
     }
@@ -209,12 +223,43 @@ mod tests {
             );
         }
         assert!(listed.iter().any(|l| l.starts_with("status target=")));
+        assert!(listed.iter().any(|l| l.starts_with("status fatal=")));
     }
 
     #[test]
-    fn contract_exit_status_matches() {
+    fn contract_exit_statuses_match_the_constants() {
         let exits = rows("exit");
-        let stopped = exits.iter().find(|r| r[0] == "stopped-by-user").unwrap();
-        assert_eq!(stopped[1].parse::<i32>().unwrap(), EXIT_STOPPED_BY_USER);
+        let code = |name: &str| -> i32 {
+            exits
+                .iter()
+                .find(|r| r[0] == name)
+                .unwrap_or_else(|| panic!("no exit row {name}"))[1]
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(code("stopped-by-user"), EXIT_STOPPED_BY_USER);
+        assert_eq!(code("needs-user-action"), dvc_common::startup::EXIT_CONFIG);
+        assert_eq!(code("failed"), dvc_common::startup::EXIT_ENV);
+    }
+
+    #[test]
+    fn a_fatal_reason_is_always_one_line() {
+        let s = Status::fatal("bad server_addr 'x':\n  invalid\r\nsyntax  ");
+        assert_eq!(
+            s,
+            Status::Fatal("bad server_addr 'x': invalid syntax".into())
+        );
+        assert_eq!(s.to_string().lines().count(), 1);
+    }
+
+    #[test]
+    fn a_fatal_reason_may_contain_equals_signs_and_still_round_trips() {
+        let s = Status::fatal("expected key=value, got x=");
+        assert_eq!(Status::parse(&s.to_string()), Some(s));
+    }
+
+    #[test]
+    fn a_fatal_line_with_no_reason_is_not_a_status() {
+        assert_eq!(Status::parse("status fatal="), None);
     }
 }

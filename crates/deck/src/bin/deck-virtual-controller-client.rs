@@ -1,28 +1,35 @@
 //! Runs on the Steam Deck: reads the Deck's controller and streams its state to
 //! the PC over UDP. The wiring lives in `dvc_deck::run`; this reads the config,
 //! opens the socket, picks the input source and turns the outcome into an exit
-//! status.
+//! status. Whenever it has to exit with an error it first tells the Deck app why
+//! (a `status fatal=` line), because the Deck screen cannot see the log.
 
 use dvc_common::info;
-use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
+use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, try_load_config};
 use dvc_deck::config::{Config, Source};
 use dvc_deck::deck_hid::HidrawDiscovery;
 use dvc_deck::evdev_source::EvdevDiscovery;
 use dvc_deck::publisher::RunEnd;
 use dvc_deck::run::{Settings, run_client};
 use dvc_deck::source::Discovery;
-use dvc_deck::status::{EXIT_STOPPED_BY_USER, print_to_stdout};
+use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
 use std::net::UdpSocket;
 
 const APP: &str = "deck-virtual-controller-client";
 
+/// Report `why` to the Deck app, then log it and exit with `code`.
+fn fatal(code: i32, why: &str) -> ! {
+    print_to_stdout()(Status::fatal(why));
+    die(code, why)
+}
+
 fn main() {
-    let cfg: Config = load_config(APP);
+    let cfg: Config = try_load_config(APP).unwrap_or_else(|e| fatal(EXIT_CONFIG, &e));
 
     let sock = UdpSocket::bind("0.0.0.0:0")
-        .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot create UDP socket: {e}")));
+        .unwrap_or_else(|e| fatal(EXIT_ENV, &format!("cannot create UDP socket: {e}")));
     sock.connect(&cfg.server_addr).unwrap_or_else(|e| {
-        die(
+        fatal(
             EXIT_CONFIG,
             &format!("bad server_addr '{}': {e}", cfg.server_addr),
         )
@@ -46,7 +53,7 @@ fn main() {
             info!("stop requested (View + Menu)");
             std::process::exit(EXIT_STOPPED_BY_USER);
         }
-        Ok(RunEnd::SourcesGone) => die(EXIT_ENV, "the controller readers stopped unexpectedly"),
-        Err(e) => die(EXIT_ENV, &format!("cannot start the client: {e}")),
+        Ok(RunEnd::SourcesGone) => fatal(EXIT_ENV, "the controller readers stopped unexpectedly"),
+        Err(e) => fatal(EXIT_ENV, &format!("cannot start the client: {e}")),
     }
 }

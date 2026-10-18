@@ -3,9 +3,11 @@ can show. No GUI code lives here, so it is tested with a fake client.
 
 The contract with the client (see src/status.rs, keep both in step):
   * stdout lines `status <key>=<value>` with target=<host:port>,
-    controller=ok|missing, server=reachable|unreachable|incompatible; other lines are ignored;
+    controller=ok|missing, server=reachable|unreachable|incompatible and, as the
+    very last line before an error exit, fatal=<why>; other lines are ignored;
   * exit status EXIT_STOPPED_BY_USER means View + Menu was pressed and the app
-    should close; any other exit status is a failure and the client is restarted.
+    should close; EXIT_NEEDS_USER means something the user must fix, so the
+    client is not restarted; any other exit status is a failure and it is retried.
 """
 import ctypes
 import dataclasses
@@ -14,6 +16,7 @@ import subprocess
 import threading
 
 EXIT_STOPPED_BY_USER = 0
+EXIT_NEEDS_USER = 2
 
 
 def parse_status(line):
@@ -32,6 +35,9 @@ class View:
     headline: str
     detail: str
     level: str  # "ok", "warn" or "error"
+    # False when the client is not running, so nothing is being sent to the PC and
+    # View + Menu does nothing: the screen must not promise either.
+    controls_active: bool = True
 
 
 def describe(state, exit_code=None):
@@ -40,8 +46,18 @@ def describe(state, exit_code=None):
     `exit_code` is set while waiting to restart a client that exited abnormally.
     """
     target = state.get("target", "")
+    why = state.get("fatal")
+    if exit_code == EXIT_NEEDS_USER:
+        return View(
+            "Cannot start",
+            f"{why or 'a setting is wrong'}\n"
+            "Close this game from the Steam menu, fix it, and start it again",
+            "error",
+            controls_active=False,
+        )
     if exit_code is not None:
-        return View("Client stopped", f"exit status {exit_code}, restarting...", "error")
+        reason = f"{why}\n" if why else ""
+        return View("Client stopped", f"{reason}exit status {exit_code}, retrying...", "error")
     if "target" not in state:
         return View("Starting...", "", "ok")
     if state.get("controller") == "missing":
@@ -114,4 +130,6 @@ class Supervisor:
                 self.on_stopped()
                 return
             self.on_view(describe(state, code))
+            if code == EXIT_NEEDS_USER:
+                return  # restarting cannot fix a setting; the screen says what to do
             self._stopping.wait(self.restart_delay)

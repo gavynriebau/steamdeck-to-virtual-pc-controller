@@ -108,6 +108,9 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 - **`cannot create uhid device ... need write access to /dev/uhid`:** run the root steps from `install-pc.sh`
   (udev rule + `sudo modprobe uhid`), make sure you're in the `input` group (log out and in after adding), and check
   `ls -l /dev/uhid` shows group `input`, mode `0660`.
+- **Deck shows "Cannot start" in red:** the client could not run for a reason you have to fix (an unedited
+  `server_addr`, a `heartbeat_ms` the server would not tolerate, ...); the screen says which. Close the game from the
+  Steam menu, fix `~/.config/deck-virtual-controller-client/config.toml`, and start it again.
 - **Deck shows "Streaming" but nothing happens on the PC:** check the server log
   (`journalctl --user -u deck-virtual-controller-server -f`) for `client connected`. If it never appears, the
   firewall is blocking UDP 24800 or `server_addr` is wrong (`~/.config/deck-virtual-controller-client/config.toml` on the Deck).

@@ -30,9 +30,11 @@ class Contract(unittest.TestCase):
         for (line,) in rows:
             self.assertIsNone(ds.parse_status(line), repr(line))
 
-    def test_exit_status_matches(self):
-        stopped = [r for r in contract_rows("exit") if r[0] == "stopped-by-user"][0]
-        self.assertEqual(int(stopped[1]), ds.EXIT_STOPPED_BY_USER)
+    def test_exit_statuses_match(self):
+        codes = {name: int(code) for name, code in contract_rows("exit")}
+        self.assertEqual(codes["stopped-by-user"], ds.EXIT_STOPPED_BY_USER)
+        self.assertEqual(codes["needs-user-action"], ds.EXIT_NEEDS_USER)
+        self.assertEqual(codes["failed"], 1)
 
     def test_every_documented_value_has_a_screen(self):
         # The app must show something sensible for each status the contract lists.
@@ -78,9 +80,36 @@ class Describe(unittest.TestCase):
         self.assertEqual((v.headline, v.level), ("Controller not found", "warn"))
 
     def test_a_crashed_client_shows_its_exit_status(self):
-        v = ds.describe({"target": "pc:1"}, exit_code=2)
+        v = ds.describe({"target": "pc:1"}, exit_code=1)
         self.assertEqual((v.headline, v.level), ("Client stopped", "error"))
-        self.assertIn("2", v.detail)
+        self.assertIn("exit status 1", v.detail)
+
+    def test_a_failure_the_client_explained_shows_its_reason(self):
+        state = {"fatal": "cannot create UDP socket: permission denied"}
+        v = ds.describe(state, exit_code=1)
+        self.assertIn("cannot create UDP socket: permission denied", v.detail)
+        self.assertIn("retrying", v.detail)
+
+    def test_a_config_problem_shows_the_reason_and_what_to_do(self):
+        v = ds.describe({"fatal": "set server_addr in your config.toml"}, exit_code=2)
+        self.assertEqual((v.headline, v.level), ("Cannot start", "error"))
+        self.assertIn("set server_addr in your config.toml", v.detail)
+        self.assertIn("Steam menu", v.detail)
+        self.assertNotIn("retrying", v.detail)
+        self.assertFalse(v.controls_active, "nothing is being sent and View + Menu does nothing")
+
+    def test_every_screen_except_a_dead_client_promises_the_controls(self):
+        states = [{}, {"target": "pc:1"}, {"target": "pc:1", "controller": "missing"},
+                  {"target": "pc:1", "server": "unreachable"}, {"target": "pc:1", "server": "incompatible"}]
+        for state in states:
+            self.assertTrue(ds.describe(state).controls_active, state)
+        self.assertTrue(ds.describe({"fatal": "x"}, exit_code=1).controls_active, "a retrying client will be back")
+        self.assertFalse(ds.describe({"fatal": "x"}, exit_code=2).controls_active)
+
+    def test_a_config_problem_without_a_reason_still_says_something_useful(self):
+        v = ds.describe({}, exit_code=2)
+        self.assertEqual(v.headline, "Cannot start")
+        self.assertIn("Steam menu", v.detail)
 
 
 def wait_for(condition, timeout=5):
@@ -117,12 +146,38 @@ class Supervise(unittest.TestCase):
     def test_an_abnormal_exit_restarts_the_client(self):
         sup, views, stopped = run_fake(
             "print('status target=pc:1', flush=True)\n"
-            "raise SystemExit(2)\n"
+            "raise SystemExit(1)\n"
         )
         wait_for(lambda: len([v for v in views if v.headline == "Client stopped"]) >= 2)
         sup.stop()
         sup.join(5)
         self.assertFalse(stopped.is_set(), "a failure must not close the app")
+
+    def test_a_config_problem_is_shown_once_and_the_client_is_not_restarted(self):
+        sup, views, stopped = run_fake(
+            "import sys\n"
+            "print('status fatal=set server_addr in your config.toml', flush=True)\n"
+            "sys.exit(2)\n",
+            restart_delay=0.05,
+        )
+        sup.join(5)
+        self.assertFalse(sup._thread.is_alive(), "the supervisor gave up instead of looping")
+        time.sleep(0.2)  # a restart loop would have produced more views by now
+        cannot_start = [v for v in views if v.headline == "Cannot start"]
+        self.assertEqual(len(cannot_start), 1)
+        self.assertIn("set server_addr in your config.toml", cannot_start[0].detail)
+        self.assertFalse(stopped.is_set(), "a failure must not look like the user stopping it")
+
+    def test_an_environment_failure_is_retried_and_shows_its_reason(self):
+        sup, views, stopped = run_fake(
+            "import sys\n"
+            "print('status fatal=cannot create UDP socket: nope', flush=True)\n"
+            "sys.exit(1)\n"
+        )
+        wait_for(lambda: len([v for v in views if v.headline == "Client stopped"]) >= 2)
+        sup.stop()
+        sup.join(5)
+        self.assertIn("cannot create UDP socket: nope", [v for v in views if v.headline == "Client stopped"][0].detail)
 
     def test_stop_terminates_the_client(self):
         sup, views, stopped = run_fake("import time\nprint('status target=pc:1', flush=True)\ntime.sleep(60)\n")

@@ -35,10 +35,13 @@ class App:
         self.headline.pack(pady=24)
         self.detail = tk.Label(box, text="", fg="#9aa4bf", bg=BG, font=("sans-serif", 20))
         self.detail.pack()
-        tk.Label(box, text="All controls go to the PC.", fg="#9aa4bf", bg=BG,
+        # What the screen promises while the client runs; hidden when it is not.
+        self.footer = tk.Frame(box, bg=BG)
+        tk.Label(self.footer, text="All controls go to the PC.", fg="#9aa4bf", bg=BG,
                  font=("sans-serif", 22)).pack(pady=(40, 8))
-        tk.Label(box, text="Press View + Menu together to stop", fg="#5d6785", bg=BG,
+        tk.Label(self.footer, text="Press View + Menu together to stop", fg="#5d6785", bg=BG,
                  font=("sans-serif", 22)).pack()
+        self.footer.pack()
         self.supervisor = Supervisor([CLIENT], self.show, self.close_from_thread)
         self.supervisor.start()
 
@@ -46,6 +49,10 @@ class App:
         def apply():
             self.headline.config(text=view.headline, fg=COLORS[view.level])
             self.detail.config(text=view.detail)
+            if view.controls_active:
+                self.footer.pack()
+            else:
+                self.footer.pack_forget()
         self.root.after(0, apply)
 
     def close_from_thread(self):
