@@ -141,14 +141,15 @@ scripts/uninstall-pc.sh                        # config is kept; it lists the ro
 ## Development
 
 ```sh
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-cargo build --release --target x86_64-unknown-linux-musl   # static binaries for the Deck
-python3 -m unittest discover -s deploy/tests               # Steam VDF format, shortcut tool, layout
-python3 -m unittest discover -s deck/tests                 # Deck app supervisor tests
-scripts/tests/test-deck-ctl.sh                             # Deck-side helper script
-scripts/tests/test-install-pc.sh                           # PC installer (fake HOME and systemctl)
-scripts/tests/test-package.sh                              # release tarball layout, installers run from it
+scripts/check.sh            # everything CI runs
+scripts/check.sh rust       # or one group: rust, python, shell
 ```
+
+`scripts/check.sh` is the one place that lists what is checked (formatting, clippy, the Rust tests and static
+builds; the Python unit tests; shellcheck and the installer, helper and packaging tests). It runs every step, then
+summarises; a step whose tool is missing (shellcheck, the musl target) is reported as skipped, and CI sets
+`CHECK_STRICT=1` so a skip fails there. New tests are picked up automatically (cargo tests, `unittest` discovery, `scripts/tests/test-*.sh`); a new *kind* of
+check is added to that script and nowhere else.
 
 The code is a Cargo workspace split along the Deck / PC seam; each side depends only on `dvc-common`:
 

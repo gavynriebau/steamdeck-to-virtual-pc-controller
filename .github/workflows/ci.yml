@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# What is checked is defined in scripts/check.sh (the same script a developer
+# runs); each job runs one group of it. CHECK_STRICT turns a skipped check (a
+# missing tool) into a failure, so CI can never pass by silently not checking.
+env:
+  CHECK_STRICT: "1"
+
 jobs:
   rust:
     runs-on: ubuntu-24.04
@@ -20,27 +26,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2.7.8
       - name: Install musl tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - name: Build static binaries
-        run: cargo build --release --target x86_64-unknown-linux-musl
+      - run: scripts/check.sh rust
 
   scripts:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
-      - name: ShellCheck
-        run: shellcheck --severity=warning scripts/*.sh scripts/tests/*.sh deploy/deck-ctl.sh
-      - name: Deck helper script tests
-        run: scripts/tests/test-deck-ctl.sh
-      - name: PC installer tests
-        run: scripts/tests/test-install-pc.sh
-      - name: Release packaging tests
-        run: scripts/tests/test-package.sh
-      - name: Python syntax
-        run: python3 -m py_compile deck/deck-controller-app.py deck/deck_supervisor.py deploy/add_steam_shortcut.py deploy/steam_vdf.py
-      - name: Steam shortcut tests
-        run: python3 -m unittest discover -s deploy/tests -v
-      - name: Deck supervisor tests
-        run: python3 -W error -m unittest discover -s deck/tests -v
+      - run: scripts/check.sh python shell
