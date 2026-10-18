@@ -17,6 +17,8 @@ games treat it as a real one, gyro and trackpads included) or as a plain **Xbox 
 Open **Deck Virtual Controller** from the Steam library on the Deck to start streaming; press
 **View + Menu** together to stop (or close the game from the Steam menu).
 
+![The status screen shown on the Steam Deck while streaming](assets/deck-screen.png)
+
 > The Deck's USB-C port is host-only, so the link has to be network-based. A USB cable alone can't carry the data.
 
 ## Requirements
