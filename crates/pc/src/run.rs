@@ -3,7 +3,7 @@
 //! creates the real virtual device; this runs the same loop against any sink,
 //! so it can be driven by a real client in tests.
 
-use crate::serve::{Acker, Event, serve_once};
+use crate::serve::{Event, serve_once};
 use crate::session::Session;
 use crate::sink::Sink;
 use dvc_common::{info, warn};
@@ -28,10 +28,9 @@ pub fn run_server(
     stop: &AtomicBool,
 ) -> io::Result<()> {
     sock.set_read_timeout(Some(timing.silence_timeout))?;
-    let mut session = Session::new();
-    let mut acker = Acker::new(timing.ack_interval);
+    let mut session = Session::new(timing.ack_interval);
     while !stop.load(Ordering::Relaxed) {
-        match serve_once(sock, &mut session, sink, &mut acker) {
+        match serve_once(sock, &mut session, sink) {
             Event::Connected(from) => info!("client connected: {from}"),
             Event::Rejected { from, reason } => {
                 warn!("ignoring packets from {from}: {reason}")
