@@ -1,0 +1,12 @@
+[package]
+name = "dvc-pc"
+description = "PC side of the virtual controller: presents the Deck as a Steam Controller or Xbox pad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dvc-common.workspace = true
+evdev.workspace = true
+serde.workspace = true

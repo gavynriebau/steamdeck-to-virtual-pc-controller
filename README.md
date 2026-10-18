@@ -142,9 +142,17 @@ python3 -m unittest discover -s deck/tests                 # Deck app supervisor
 scripts/tests/test-deck-ctl.sh                             # Deck-side helper script
 ```
 
-`src/proto.rs` is the wire format, `src/deck_hid.rs` parses the Deck's HID reports, `src/uhid.rs` is the Steam
-Controller emulation (its tests compare against a report captured from a real controller). Releases are built by
-GitHub Actions when a `v*` tag is pushed.
+The code is a Cargo workspace split along the Deck / PC seam; each side depends only on `dvc-common`:
+
+| Crate | Contains |
+|---|---|
+| `crates/common` | `controller` (named buttons, controller state), `proto` (wire format, one field table), `xbox_pad` (evdev vocabulary), `config` and `startup` |
+| `crates/deck` | `deck_hid` (Deck hardware reader), `evdev_source`, `publisher` (what becomes a packet), `link` (is the server answering), `status` (the contract with the Deck app); binary `deck-virtual-controller-client` |
+| `crates/pc` | `session` (who we listen to), `serve` (one receive step), `sink` (+ `xbox_sink`, `steam_controller` over `uhid`); binary `deck-virtual-controller-server` |
+
+`steam_controller`'s tests compare against a report captured from a real controller, and `deck_hid`'s against one
+captured from a real Deck. The Deck app (`deck/`) talks to the client only through the lines and exit status described
+in `crates/deck/src/status.rs`. Releases are built by GitHub Actions when a `v*` tag is pushed.
 
 ## License
 

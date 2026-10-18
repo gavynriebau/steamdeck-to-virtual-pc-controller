@@ -2,8 +2,8 @@
 //! controller must be released. No sockets and no clock, so it is tested by
 //! feeding it packets.
 
-use crate::controller::State;
-use crate::proto::{self, DecodeError, Packet};
+use dvc_common::controller::State;
+use dvc_common::proto::{self, DecodeError, Packet};
 use std::net::SocketAddr;
 
 /// What to do with a datagram.
@@ -73,7 +73,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::Button;
+    use dvc_common::controller::Button;
 
     fn addr(port: u16) -> SocketAddr {
         SocketAddr::from(([192, 168, 1, 5], port))

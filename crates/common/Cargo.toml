@@ -1,0 +1,11 @@
+[package]
+name = "dvc-common"
+description = "Shared controller state, wire format and start-up code for the Steam Deck virtual controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true

@@ -1,14 +1,15 @@
 //! Runs on the Steam Deck: reads the Deck's controller and streams its state to
 //! the PC over UDP.
 
+use dvc_common::config::Validate;
+use dvc_common::proto;
+use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
+use dvc_deck::publisher::{Publisher, RunEnd, run};
+use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
+use dvc_deck::{deck_hid, evdev_source, link};
 use serde::Deserialize;
 use std::net::UdpSocket;
 use std::time::Duration;
-use steamdeck_as_pc_controller::config::Validate;
-use steamdeck_as_pc_controller::publisher::{Publisher, RunEnd, run};
-use steamdeck_as_pc_controller::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
-use steamdeck_as_pc_controller::{deck_hid, evdev_source, link, proto};
 
 const APP: &str = "deck-virtual-controller-client";
 

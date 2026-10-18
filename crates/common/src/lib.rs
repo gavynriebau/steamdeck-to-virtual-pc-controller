@@ -1,22 +1,12 @@
-//! Shared code for the Steam Deck virtual controller client (runs on the Deck)
-//! and server (runs on the PC).
+//! Code shared by the Deck side and the PC side: what a controller's state is,
+//! how it travels over the wire, and process start-up. Neither side may depend
+//! on the other, only on this crate.
 
 pub mod config;
 pub mod controller;
-pub mod deck_hid;
-pub mod evdev_source;
-pub mod link;
 pub mod proto;
-pub mod publisher;
-pub mod serve;
-pub mod session;
-pub mod sink;
 pub mod startup;
-pub mod status;
-pub mod steam_controller;
-pub mod uhid;
 pub mod xbox_pad;
-pub mod xbox_sink;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

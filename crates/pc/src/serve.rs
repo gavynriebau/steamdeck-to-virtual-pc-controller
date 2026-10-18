@@ -2,10 +2,10 @@
 //! decision out. [`serve_once`] is what the server binary calls in a loop, and
 //! what the loopback test drives.
 
-use crate::controller::State;
-use crate::proto::{self, Ack, DecodeError};
 use crate::session::{Accept, Session};
 use crate::sink::Sink;
+use dvc_common::controller::State;
+use dvc_common::proto::{self, Ack, DecodeError};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -102,9 +102,9 @@ pub fn serve_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::Button;
-    use crate::proto::Packet;
     use crate::sink::MemorySink;
+    use dvc_common::controller::Button;
+    use dvc_common::proto::Packet;
     use std::time::Duration;
 
     /// A server socket on loopback with a short silence timeout, and a client socket.

@@ -1,8 +1,8 @@
 //! Presents the state as an Xbox 360 gamepad through uinput.
 
-use crate::controller::{self, Button, State};
 use crate::sink::Sink;
-use crate::xbox_pad;
+use dvc_common::controller::{self, Button, State};
+use dvc_common::xbox_pad;
 use evdev::uinput::VirtualDevice;
 use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode, UinputAbsSetup,

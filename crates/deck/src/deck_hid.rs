@@ -4,9 +4,9 @@
 //! layout. Offsets follow the Deck report layout (as used by SDL) and were
 //! checked against the real hardware.
 
-use crate::controller::{Button, State, TRIGGER_MAX, axis};
-use crate::lock;
 use crate::status::{Report, Status};
+use dvc_common::controller::{Button, State, TRIGGER_MAX, axis};
+use dvc_common::lock;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;

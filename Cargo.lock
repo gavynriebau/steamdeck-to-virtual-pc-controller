@@ -33,6 +33,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "dvc-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "dvc-deck"
+version = "0.1.0"
+dependencies = [
+ "dvc-common",
+ "evdev",
+ "serde",
+]
+
+[[package]]
+name = "dvc-pc"
+version = "0.1.0"
+dependencies = [
+ "dvc-common",
+ "evdev",
+ "serde",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -151,15 +177,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "steamdeck-as-pc-controller"
-version = "0.1.0"
-dependencies = [
- "evdev",
- "serde",
- "toml",
 ]
 
 [[package]]

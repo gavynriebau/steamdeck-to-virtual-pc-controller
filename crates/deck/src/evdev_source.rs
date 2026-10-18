@@ -1,9 +1,9 @@
 //! Reads a Linux gamepad (by default Steam Input's virtual Xbox pad on the
 //! Deck) through evdev. The alternative to reading the Deck hardware directly.
 
-use crate::controller::State;
 use crate::status::{Report, Status};
-use crate::xbox_pad;
+use dvc_common::controller::State;
+use dvc_common::xbox_pad;
 use evdev::EventSummary;
 use evdev::raw_stream::{RawDevice, enumerate};
 use std::path::PathBuf;
@@ -100,7 +100,7 @@ pub fn spawn(device: String, tx: Sender<State>, report: Report) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::{Button, axis};
+    use dvc_common::controller::{Button, axis};
 
     const EV_KEY: u16 = 1;
     const EV_ABS: u16 = 3;

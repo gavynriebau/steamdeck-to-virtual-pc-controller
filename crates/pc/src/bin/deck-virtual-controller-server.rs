@@ -1,17 +1,17 @@
 //! Runs on the PC: receives controller state over UDP and presents it as an
 //! emulated Steam Controller (via /dev/uhid) or an Xbox pad (via /dev/uinput).
 
+use dvc_common::config::Validate;
+use dvc_common::proto;
+use dvc_common::startup::{EXIT_ENV, die, load_config};
+use dvc_pc::serve::{Acker, Event, serve_once};
+use dvc_pc::session::Session;
+use dvc_pc::sink::Sink;
+use dvc_pc::steam_controller::{DeviceEvent, SteamSink};
+use dvc_pc::xbox_sink::XboxSink;
 use serde::Deserialize;
 use std::net::UdpSocket;
 use std::time::Duration;
-use steamdeck_as_pc_controller::config::Validate;
-use steamdeck_as_pc_controller::proto;
-use steamdeck_as_pc_controller::serve::{Acker, Event, serve_once};
-use steamdeck_as_pc_controller::session::Session;
-use steamdeck_as_pc_controller::sink::Sink;
-use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::steam_controller::{DeviceEvent, SteamSink};
-use steamdeck_as_pc_controller::xbox_sink::XboxSink;
 
 const APP: &str = "deck-virtual-controller-server";
 

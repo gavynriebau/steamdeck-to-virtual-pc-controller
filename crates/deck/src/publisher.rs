@@ -3,8 +3,8 @@
 //! Sources (the Deck hardware, an evdev pad) feed it states; it knows nothing
 //! about where they come from or how packets travel.
 
-use crate::controller::{State, axis};
-use crate::proto::Packet;
+use dvc_common::controller::{State, axis};
+use dvc_common::proto::Packet;
 use std::net::UdpSocket;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
@@ -119,7 +119,7 @@ pub fn run<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::Button;
+    use dvc_common::controller::Button;
     use std::cell::RefCell;
     use std::rc::Rc;
 

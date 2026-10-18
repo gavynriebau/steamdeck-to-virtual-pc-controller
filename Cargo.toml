@@ -1,13 +1,15 @@
-[package]
-name = "steamdeck-as-pc-controller"
+[workspace]
+resolver = "3"
+members = ["crates/common", "crates/deck", "crates/pc"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Use a Steam Deck as a controller for a Linux PC: streams its inputs to an emulated Steam Controller or Xbox pad"
 license = "MIT"
-readme = "README.md"
 
-[dependencies]
+[workspace.dependencies]
 evdev = "0.13.2"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+dvc-common = { path = "crates/common" }

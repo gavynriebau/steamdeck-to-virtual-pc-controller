@@ -2,7 +2,7 @@
 //! kernel's UHID event layout and nothing about what the device is: callers
 //! supply an [`Identity`] and a [`Handler`] that answers the host's reports.
 
-use crate::lock;
+use dvc_common::lock;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};

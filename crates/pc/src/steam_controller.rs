@@ -3,10 +3,10 @@
 //! controller. The kernel's `hid-steam` driver and the Steam client then see the
 //! same HID device a real wired controller presents.
 
-use crate::controller::{Button, State, TRIGGER_MAX, axis};
-use crate::lock;
 use crate::sink::Sink;
 use crate::uhid::{BUS_USB, Handler, Identity, UhidDevice};
+use dvc_common::controller::{Button, State, TRIGGER_MAX, axis};
+use dvc_common::lock;
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::mpsc::Sender;

@@ -1,7 +1,7 @@
 //! Does the server hear us? UDP never says, so the server acks now and then and
 //! this tracks whether acks keep arriving.
 
-use crate::proto::Ack;
+use dvc_common::proto::Ack;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 

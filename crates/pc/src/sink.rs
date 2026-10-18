@@ -2,7 +2,7 @@
 //! the PC (an emulated Steam Controller, an Xbox pad); [`MemorySink`] records it
 //! for tests.
 
-use crate::controller::State;
+use dvc_common::controller::State;
 
 pub trait Sink {
     /// Make the virtual controller look like `state`. Called for every accepted

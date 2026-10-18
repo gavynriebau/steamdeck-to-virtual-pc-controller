@@ -1,0 +1,12 @@
+[package]
+name = "dvc-deck"
+description = "Steam Deck side of the virtual controller: reads the Deck's inputs and streams them to the PC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dvc-common.workspace = true
+evdev.workspace = true
+serde.workspace = true
