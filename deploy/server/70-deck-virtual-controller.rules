@@ -1,0 +1,3 @@
+# Let members of the "input" group create the virtual controller devices.
+KERNEL=="uhid", GROUP="input", MODE="0660"
+KERNEL=="uinput", GROUP="input", MODE="0660"

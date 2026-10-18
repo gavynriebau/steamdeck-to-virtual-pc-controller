@@ -77,14 +77,19 @@ impl State {
 impl Packet {
     pub fn encode(&self) -> [u8; PACKET_LEN] {
         let st = &self.state;
-        let mut w = Writer { b: [0u8; PACKET_LEN], at: 0 };
+        let mut w = Writer {
+            b: [0u8; PACKET_LEN],
+            at: 0,
+        };
         w.bytes(&MAGIC);
         w.bytes(&self.seq.to_le_bytes());
         w.bytes(&st.buttons.to_le_bytes());
         st.axes.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
         st.hat.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
         st.pads.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
-        st.pad_pressure.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
+        st.pad_pressure
+            .iter()
+            .for_each(|v| w.bytes(&v.to_le_bytes()));
         st.accel.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
         st.gyro.iter().for_each(|v| w.bytes(&v.to_le_bytes()));
         w.b
@@ -97,7 +102,10 @@ impl Packet {
         let mut r = Reader { b, at: 4 };
         let seq = u32::from_le_bytes(r.take()?);
         let buttons = u32::from_le_bytes(r.take()?);
-        let mut st = State { buttons, ..State::default() };
+        let mut st = State {
+            buttons,
+            ..State::default()
+        };
         for v in st.axes.iter_mut() {
             *v = i16::from_le_bytes(r.take()?);
         }
@@ -173,8 +181,20 @@ mod tests {
 
     #[test]
     fn stop_chord_needs_both() {
-        assert!(State { buttons: 0b1100_0000, ..Default::default() }.is_stop_chord());
-        assert!(!State { buttons: 0b0100_0000, ..Default::default() }.is_stop_chord());
+        assert!(
+            State {
+                buttons: 0b1100_0000,
+                ..Default::default()
+            }
+            .is_stop_chord()
+        );
+        assert!(
+            !State {
+                buttons: 0b0100_0000,
+                ..Default::default()
+            }
+            .is_stop_chord()
+        );
     }
 
     #[test]

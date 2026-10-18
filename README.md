@@ -1,15 +1,146 @@
-# Steam Deck as PC controller
+# Steam Deck as PC Controller
 
-Streams the Deck's controls over UDP (LAN) to a virtual controller on the PC: an emulated Steam Controller
-(buttons, sticks, trackpads, gyro — Steam adopts it as a real one) or an Xbox 360 pad.
-(The Deck's USB-C port can't act as a USB gadget, so the USB cable only powers it.)
+Use your Steam Deck as a controller for a Linux PC. The Deck streams its buttons, sticks, triggers,
+trackpads and gyro over your network to the PC, where they appear as a **Steam Controller** (Steam and
+games treat it as a real one, gyro and trackpads included) or as a plain **Xbox 360 pad**.
 
-- **Server** (PC): `cargo run --release --bin deck-virtual-controller-server` — needs write access to `/dev/uhid` (`steam` type) or `/dev/uinput` (`xbox` type).
-  Config: `./config.toml` or `~/.config/deck-virtual-controller-server/config.toml` (see `deploy/server/config.toml`), or `--config <path>`.
-  `controller_type = "steam"` (default) or `"xbox"` picks the type of virtual pad.
-- **Deck**: `./install.sh [deck@deck] [pc-ip]` builds a static client, installs it plus a fullscreen status app,
-  and adds a **Deck Virtual Controller** entry to the Steam library (this restarts Steam on the Deck once).
-  Open it from the library to start streaming; press View + Menu together on the Deck (or close the game from the Steam menu) to stop.
-  Client config: `~/.config/deck-virtual-controller-client/config.toml` (see `deploy/client/config.toml`).
+```
+ Steam Deck                                         Linux PC
+┌───────────────────────────┐   UDP :24800   ┌───────────────────────────────┐
+│ Steam library entry       │ ─────────────▶ │ deck-virtual-controller-server│
+│  └ deck-controller-app    │  (Wi-Fi/LAN)   │  ├ "steam": /dev/uhid  ──▶ Steam Controller (28de:1302)
+│     └ ...-client          │                │  └ "xbox":  /dev/uinput ─▶ Xbox 360 pad
+│        reads Deck hidraw  │                └───────────────────────────────┘
+└───────────────────────────┘
+```
 
-Port 24800/udp must be reachable on the PC.
+Open **Deck Virtual Controller** from the Steam library on the Deck to start streaming; press
+**View + Menu** together to stop (or close the game from the Steam menu).
+
+> The Deck's USB-C port is host-only, so the link has to be network-based. A USB cable alone can't carry the data.
+
+## Requirements
+
+- **Deck:** SteamOS, reachable from the PC over SSH (`ssh deck@deck` by default). Desktop Mode's SSH must be enabled (`sudo systemctl enable --now sshd`, with a password set via `passwd`).
+- **PC:** x86-64 Linux with systemd, the `uhid` and `uinput` kernel modules, and the Rust toolchain only if you build from source. Steam on the PC is needed for the `steam` controller type to be useful.
+- Both on the same network, with **UDP port 24800** open on the PC.
+
+## Quick start
+
+Get the code (clone this repo, or download and extract a release tarball from the Releases page; releases contain prebuilt static binaries).
+
+1. **PC:** install the server and its service.
+
+   ```sh
+   scripts/install-pc.sh
+   ```
+
+   It prints the few steps that need root (udev rule for `/dev/uhid` and `/dev/uinput`, kernel modules at boot).
+   Review and run them, or let the script do it with `scripts/install-pc.sh --sudo`. Your user must be in the
+   `input` group. Open UDP 24800 in your firewall if you have one.
+
+2. **Deck:** install the client and the Steam library entry, from the PC.
+
+   ```sh
+   scripts/install-deck.sh                                # deck@deck, PC address auto-detected
+   scripts/install-deck.sh --deck me@192.168.1.50 --pc 192.168.1.20
+   ```
+
+   This restarts Steam on the Deck once, to pick up the new library entry (existing entries are untouched and
+   `shortcuts.vdf` is backed up first).
+
+3. On the Deck, switch to Game Mode and start **Deck Virtual Controller** from the library (Non-Steam).
+   The screen shows *Streaming to PC*. On the PC, Steam should now list a Steam Controller.
+
+## Controller types
+
+Set `controller_type` in the server's `config.toml`:
+
+| Type | Appears as | Supports |
+|---|---|---|
+| `steam` (default) | Steam Controller (2026), USB ID `28de:1302`, via `/dev/uhid` | buttons, sticks, triggers, both trackpads (touch, click, pressure), gyro/accelerometer, four rear grips, quick-access button |
+| `xbox` | Xbox 360 controller, `045e:028e`, via `/dev/uinput` | buttons, sticks, triggers, d-pad |
+
+Deck control mapping for `steam`: Deck sticks and triggers map to the same controls; L4/L5/R4/R5 become the
+four rear grips; the `...` button becomes quick access; the trackpads and IMU are passed through unchanged.
+
+## Configuration
+
+Both programs read a `config.toml` (first found of: `--config <path>`, `./config.toml`,
+`~/.config/<program>/config.toml`). Missing keys use the defaults below. Examples are in `deploy/`.
+
+**Server** (`deck-virtual-controller-server`, on the PC):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `bind_addr` | `0.0.0.0:24800` | UDP address to listen on |
+| `timeout_ms` | `1000` | release all inputs if the Deck is silent this long |
+| `controller_type` | `steam` | `steam` or `xbox` |
+| `name` | `Steam Deck Virtual Controller` | name of the virtual device |
+
+**Client** (`deck-virtual-controller-client`, on the Deck; the installer sets `server_addr`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `server_addr` | none, required | `host:port` of the PC |
+| `source` | `hidraw` | `hidraw` reads the Deck hardware directly (works in Game Mode with any Steam layout); `evdev` reads a Linux gamepad device |
+| `device` | auto | (evdev only) device path or name |
+| `heartbeat_ms` | `100` | resend interval when nothing changes |
+| `deadzone` | `0` | stick deadzone in raw units (sticks span ±32767) |
+
+## How it works
+
+- **Deck:** `deck-controller-app` (a fullscreen Tk status screen) runs the client as a child process, so closing the
+  game in Steam stops streaming. The client reads the Deck's raw HID state reports from `/dev/hidraw*` (so it works
+  regardless of Steam Input layouts), and sends a 50-byte UDP packet on every change plus a heartbeat.
+  Pressing View + Menu together sends a neutral state and exits.
+- **PC, `steam` type:** the server creates a HID device through `/dev/uhid` that copies a real 2026 Steam
+  Controller: its USB IDs, report descriptor and feature-report handshake. It then streams `0x42` input reports at
+  250 Hz, because Steam drops a controller that goes quiet. The kernel's `hid-steam` driver and the Steam client
+  treat it like the real thing.
+- **PC, `xbox` type:** a uinput gamepad with the usual Xbox 360 identity.
+
+## Troubleshooting
+
+- **`cannot create uhid device ... need write access to /dev/uhid`:** run the root steps from `install-pc.sh`
+  (udev rule + `sudo modprobe uhid`), make sure you're in the `input` group (log out and in after adding), and check
+  `ls -l /dev/uhid` shows group `input`, mode `0660`.
+- **Deck shows "Streaming" but nothing happens on the PC:** check the server log
+  (`journalctl --user -u deck-virtual-controller-server -f`) for `client connected`. If it never appears, the
+  firewall is blocking UDP 24800 or `server_addr` is wrong (`~/.config/deck-virtual-controller-client/config.toml` on the Deck).
+- **Steam doesn't list the controller:** look at `~/.local/share/Steam/logs/controller.txt` on the PC for the
+  `28de 1302` device. With the real controller plugged in at the same time, Steam may prefer that one.
+- **Screen says "no controller data yet":** the client could not read the Deck's hidraw device; run it with
+  `source = "evdev"` as a fallback.
+
+## Known limitations
+
+- **No authentication or encryption.** Any machine that can reach UDP 24800 on the PC can send controller input.
+  Only run it on a network you trust (or firewall the port to the Deck's address).
+- The **Steam button** (and the `...` button) on the Deck still opens the Deck's own Steam menu. Steam handles those
+  itself before this app sees a press; the PC still receives them.
+- Gyro, accelerometer and trackpad values are passed through without recalibration, assuming the Deck and the
+  Steam Controller sensors use the same scaling. The Deck's right trackpad pressure range differs slightly.
+- Rumble and haptics from the PC are not sent back to the Deck.
+
+## Uninstall
+
+```sh
+scripts/uninstall-deck.sh [--deck user@host]   # also removes the Steam library entry (restarts Steam)
+scripts/uninstall-pc.sh                        # config is kept; it lists the root-owned files to remove
+```
+
+## Development
+
+```sh
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo build --release --target x86_64-unknown-linux-musl   # static binaries for the Deck
+```
+
+`src/proto.rs` is the wire format, `src/deck_hid.rs` parses the Deck's HID reports, `src/uhid.rs` is the Steam
+Controller emulation (its tests compare against a report captured from a real controller). Releases are built by
+GitHub Actions when a `v*` tag is pushed.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

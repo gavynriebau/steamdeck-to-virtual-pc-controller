@@ -40,15 +40,17 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         box = tk.Frame(self.root, bg="#0b1020")
         box.place(relx=0.5, rely=0.5, anchor="center")
-        tk.Label(box, text="Deck virtual controller", fg="white", bg="#0b1020",
+        tk.Label(box, text="Steam Deck as PC Controller", fg="white", bg="#0b1020",
                  font=("sans-serif", 44, "bold")).pack()
         self.status = tk.Label(box, text="Starting…", fg="#6ee7a0", bg="#0b1020",
                                font=("sans-serif", 30))
         self.status.pack(pady=24)
         self.detail = tk.Label(box, text="", fg="#9aa4bf", bg="#0b1020", font=("sans-serif", 20))
         self.detail.pack()
-        tk.Label(box, text="All controls go to the PC.  Press View + Menu together to stop.",
-                 fg="#5d6785", bg="#0b1020", font=("sans-serif", 16)).pack(pady=40)
+        tk.Label(box, text="All controls go to the PC.", fg="#9aa4bf", bg="#0b1020",
+                 font=("sans-serif", 22)).pack(pady=(40, 8))
+        tk.Label(box, text="Press View + Menu together to stop", fg="#5d6785", bg="#0b1020",
+                 font=("sans-serif", 22)).pack()
         self.addr = server_addr()
         self.proc = None
         self.stopping = False

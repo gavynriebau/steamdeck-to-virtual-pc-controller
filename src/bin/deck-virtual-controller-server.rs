@@ -2,11 +2,14 @@
 //! virtual Xbox-style gamepad via uinput.
 
 use evdev::uinput::VirtualDevice;
-use evdev::{AbsInfo, AttributeSet, BusType, InputEvent, InputId, KeyCode, UinputAbsSetup, AbsoluteAxisCode};
+use evdev::{
+    AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode, UinputAbsSetup,
+};
 use serde::Deserialize;
 use std::net::UdpSocket;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use steamdeck_as_pc_controller::{config, proto, uhid};
+use steamdeck_as_pc_controller::{config, lock, proto, uhid};
 
 const APP: &str = "deck-virtual-controller-server";
 const EV_KEY: u16 = 1;
@@ -60,15 +63,23 @@ impl Layout {
         let stick = AbsInfo::new(0, proto::STICK_MIN, proto::STICK_MAX, 16, 128, 0);
         let trigger = AbsInfo::new(0, 0, proto::TRIGGER_MAX, 0, 0, 0);
         let mut buttons = [None; proto::BUTTONS.len()];
-        for i in 0..proto::XBOX_BUTTONS {
-            buttons[i] = Some(proto::BUTTONS[i]);
+        for (slot, &code) in buttons
+            .iter_mut()
+            .zip(&proto::BUTTONS)
+            .take(proto::XBOX_BUTTONS)
+        {
+            *slot = Some(code);
         }
         Layout {
             id: InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
             buttons,
             axes: [
-                (0x00, stick), (0x01, stick), (0x02, trigger),
-                (0x03, stick), (0x04, stick), (0x05, trigger),
+                (0x00, stick),
+                (0x01, stick),
+                (0x02, trigger),
+                (0x03, stick),
+                (0x04, stick),
+                (0x05, trigger),
             ],
             hat: [proto::HAT_AXES[0], proto::HAT_AXES[1]],
         }
@@ -81,7 +92,10 @@ fn build_device(name: &str, layout: &Layout) -> std::io::Result<VirtualDevice> {
         keys.insert(KeyCode(*code));
     }
     let hat = AbsInfo::new(0, -1, 1, 0, 0, 0);
-    let mut b = VirtualDevice::builder()?.name(name).input_id(layout.id.clone()).with_keys(&keys)?;
+    let mut b = VirtualDevice::builder()?
+        .name(name)
+        .input_id(layout.id.clone())
+        .with_keys(&keys)?;
     for &(code, info) in &layout.axes {
         b = b.with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode(code), info))?;
     }
@@ -102,7 +116,11 @@ fn diff(layout: &Layout, old: &proto::State, new: &proto::State) -> Vec<InputEve
     }
     for i in 0..6 {
         if old.axes[i] != new.axes[i] {
-            ev.push(InputEvent::new(EV_ABS, layout.axes[i].0, new.axes[i] as i32));
+            ev.push(InputEvent::new(
+                EV_ABS,
+                layout.axes[i].0,
+                new.axes[i] as i32,
+            ));
         }
     }
     for (i, &code) in layout.hat.iter().enumerate() {
@@ -113,39 +131,58 @@ fn diff(layout: &Layout, old: &proto::State, new: &proto::State) -> Vec<InputEve
     ev
 }
 
+/// Where decoded controller state goes.
+enum Output {
+    /// uinput Xbox pad: events are emitted when the state changes.
+    Uinput(Box<(VirtualDevice, Layout)>),
+    /// Emulated Steam Controller: a streamer thread sends the latest state.
+    Hid(Arc<Mutex<proto::State>>),
+}
+
+fn fail(msg: &str) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(1);
+}
+
+fn open_output(cfg: &Config) -> Output {
+    match cfg.controller_type {
+        ControllerType::Xbox => {
+            let layout = Layout::xbox();
+            let dev = build_device(&cfg.name, &layout).unwrap_or_else(|e| {
+                fail(&format!(
+                    "cannot create uinput device: {e} (need write access to /dev/uinput)"
+                ))
+            });
+            Output::Uinput(Box::new((dev, layout)))
+        }
+        ControllerType::Steam => {
+            let dev = uhid::SteamControllerDevice::create(&cfg.name).unwrap_or_else(|e| {
+                fail(&format!(
+                    "cannot create uhid device: {e} (need write access to /dev/uhid)"
+                ))
+            });
+            let shared = Arc::new(Mutex::new(proto::State::default()));
+            dev.stream(shared.clone(), Duration::from_millis(4));
+            Output::Hid(shared)
+        }
+    }
+}
+
 fn main() {
     let cfg: Config = config::load(APP).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2);
     });
 
-    let layout = Layout::xbox();
-    // "steam" is a real (emulated) Steam Controller HID device; "xbox" is a uinput gamepad.
-    let (mut pad, steam) = match cfg.controller_type {
-        ControllerType::Xbox => (Some(build_device(&cfg.name, &layout)), None),
-        ControllerType::Steam => (None, Some(uhid::SteamControllerDevice::create(&cfg.name))),
-    };
-    if let Some(Err(e)) = &pad {
-        eprintln!("cannot create uinput device: {e} (need write access to /dev/uinput)");
-        std::process::exit(1);
-    }
-    if let Some(Err(e)) = &steam {
-        eprintln!("cannot create uhid device: {e} (need write access to /dev/uhid)");
-        std::process::exit(1);
-    }
-    let mut pad = pad.take().map(Result::unwrap);
-    // The Steam Controller device streams the latest state continuously.
-    let shared_state = steam.map(|dev| {
-        let shared = std::sync::Arc::new(std::sync::Mutex::new(proto::State::default()));
-        dev.unwrap().stream(shared.clone(), Duration::from_millis(4));
-        shared
-    });
-    let sock = UdpSocket::bind(&cfg.bind_addr).unwrap_or_else(|e| {
-        eprintln!("cannot bind {}: {e}", cfg.bind_addr);
-        std::process::exit(1);
-    });
-    sock.set_read_timeout(Some(Duration::from_millis(cfg.timeout_ms.max(50)))).unwrap();
-    eprintln!("listening on {}, virtual device '{}'", cfg.bind_addr, cfg.name);
+    let mut output = open_output(&cfg);
+    let sock = UdpSocket::bind(&cfg.bind_addr)
+        .unwrap_or_else(|e| fail(&format!("cannot bind {}: {e}", cfg.bind_addr)));
+    sock.set_read_timeout(Some(Duration::from_millis(cfg.timeout_ms.max(50))))
+        .unwrap_or_else(|e| fail(&format!("cannot set socket timeout: {e}")));
+    eprintln!(
+        "listening on {}, virtual device '{}'",
+        cfg.bind_addr, cfg.name
+    );
 
     let mut current = proto::State::default();
     let mut last_seq: Option<u32> = None;
@@ -154,7 +191,10 @@ fn main() {
     loop {
         let next = match sock.recv_from(&mut buf) {
             Ok((n, from)) => match proto::Packet::decode(&buf[..n]) {
-                Some(p) if last_seq.is_none_or(|l| proto::is_newer(p.seq, l)) || client != Some(from) => {
+                Some(p)
+                    if last_seq.is_none_or(|l| proto::is_newer(p.seq, l))
+                        || client != Some(from) =>
+                {
                     if client != Some(from) {
                         eprintln!("client connected: {from}");
                         client = Some(from);
@@ -164,7 +204,12 @@ fn main() {
                 }
                 _ => continue,
             },
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
                 if client.take().is_some() {
                     eprintln!("client timed out, releasing inputs");
                 }
@@ -176,17 +221,21 @@ fn main() {
                 continue;
             }
         };
-        if let Some(shared) = &shared_state {
-            *shared.lock().unwrap() = next;
-            current = next;
-            continue;
-        }
-        let events = diff(&layout, &current, &next);
-        if !events.is_empty() {
-            if let Err(e) = pad.as_mut().unwrap().emit(&events) {
-                eprintln!("emit failed: {e}");
+        match &mut output {
+            Output::Hid(shared) => {
+                *lock(shared) = next;
+                current = next;
             }
-            current = next;
+            Output::Uinput(uinput) => {
+                let (dev, layout) = &mut **uinput;
+                let events = diff(layout, &current, &next);
+                if !events.is_empty() {
+                    if let Err(e) = dev.emit(&events) {
+                        eprintln!("emit failed: {e}");
+                    }
+                    current = next;
+                }
+            }
         }
     }
 }

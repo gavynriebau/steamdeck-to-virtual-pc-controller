@@ -3,6 +3,7 @@
 //! a real controller. The kernel's `hid-steam` driver and the Steam client then
 //! see the same HID device a real wired controller presents.
 
+use crate::lock;
 use crate::proto::{self, State};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -28,7 +29,9 @@ const REPORT_DESCRIPTOR_HEX: &str = include_str!("ibex_report_descriptor.hex");
 
 fn report_descriptor() -> Vec<u8> {
     let hex = REPORT_DESCRIPTOR_HEX.trim();
-    (0..hex.len() / 2).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap()).collect()
+    (0..hex.len() / 2)
+        .filter_map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
+        .collect()
 }
 
 /// Captured reply to the `0x83` (get attributes) feature command.
@@ -44,6 +47,12 @@ pub struct SteamControllerDevice {
     file: Arc<Mutex<File>>,
 }
 
+fn get_u16(b: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([b[off], b[off + 1]])
+}
+fn get_u32(b: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
 fn put_u16(b: &mut [u8], off: usize, v: u16) {
     b[off..off + 2].copy_from_slice(&v.to_le_bytes());
 }
@@ -53,7 +62,10 @@ fn put_u32(b: &mut [u8], off: usize, v: u32) {
 
 impl SteamControllerDevice {
     pub fn create(name: &str) -> io::Result<Self> {
-        let mut file = OpenOptions::new().read(true).write(true).open("/dev/uhid")?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/uhid")?;
         let mut ev = vec![0u8; EVENT_LEN];
         put_u32(&mut ev, 0, UHID_CREATE2);
         let n = name.len().min(127);
@@ -75,19 +87,19 @@ impl SteamControllerDevice {
             let mut last_cmd: Vec<u8> = Vec::new();
             let mut buf = vec![0u8; EVENT_LEN];
             while reader.read(&mut buf).is_ok() {
-                match u32::from_le_bytes(buf[0..4].try_into().unwrap()) {
+                match get_u32(&buf, 0) {
                     UHID_START => eprintln!("uhid: device started"),
                     UHID_SET_REPORT => {
-                        let id = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-                        let size = u16::from_le_bytes(buf[10..12].try_into().unwrap()) as usize;
+                        let id = get_u32(&buf, 4);
+                        let size = get_u16(&buf, 10) as usize;
                         last_cmd = buf[12..12 + size.min(4096)].to_vec();
                         let mut r = vec![0u8; EVENT_LEN];
                         put_u32(&mut r, 0, UHID_SET_REPORT_REPLY);
                         put_u32(&mut r, 4, id);
-                        let _ = writer.lock().unwrap().write_all(&r);
+                        let _ = lock(&writer).write_all(&r);
                     }
                     UHID_GET_REPORT => {
-                        let id = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+                        let id = get_u32(&buf, 4);
                         let reply = feature_reply(&last_cmd);
                         let mut r = vec![0u8; EVENT_LEN];
                         put_u32(&mut r, 0, UHID_GET_REPORT_REPLY);
@@ -95,7 +107,7 @@ impl SteamControllerDevice {
                         put_u16(&mut r, 8, 0);
                         put_u16(&mut r, 10, reply.len() as u16);
                         r[12..12 + reply.len()].copy_from_slice(&reply);
-                        let _ = writer.lock().unwrap().write_all(&r);
+                        let _ = lock(&writer).write_all(&r);
                     }
                     _ => {}
                 }
@@ -113,7 +125,7 @@ impl SteamControllerDevice {
             loop {
                 std::thread::sleep(interval);
                 seq = seq.wrapping_add(1);
-                let st = *state.lock().unwrap();
+                let st = *lock(&state);
                 let ts = start.elapsed().as_micros() as u32;
                 if let Err(e) = self.send_report(&state_report(seq, ts, &st)) {
                     eprintln!("uhid write failed: {e}");
@@ -127,8 +139,8 @@ impl SteamControllerDevice {
         let mut ev = vec![0u8; EVENT_LEN];
         put_u32(&mut ev, 0, UHID_INPUT2);
         put_u16(&mut ev, 4, report.len() as u16);
-        ev[6..6 + report.len()].copy_from_slice(&report);
-        self.file.lock().unwrap().write_all(&ev)
+        ev[6..6 + report.len()].copy_from_slice(report);
+        lock(&self.file).write_all(&ev)
     }
 }
 
@@ -136,7 +148,7 @@ impl Drop for SteamControllerDevice {
     fn drop(&mut self) {
         let mut ev = vec![0u8; EVENT_LEN];
         put_u32(&mut ev, 0, UHID_DESTROY);
-        let _ = self.file.lock().unwrap().write_all(&ev);
+        let _ = lock(&self.file).write_all(&ev);
     }
 }
 
@@ -172,41 +184,53 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
         }
     };
     // Bit positions were captured from a real controller.
-    set(&mut r[2], &[
-        (b(0), 0),                // A
-        (b(1), 1),                // B
-        (b(2), 2),                // X
-        (b(3), 3),                // Y
-        (b(proto::BTN_QAM), 4),   // quick access
-        (b(10), 5),               // right stick click
-        (b(7), 6),                // Menu -> Start
-        (b(12), 7),               // R4 -> right top grip
-    ]);
-    set(&mut r[3], &[
-        (b(proto::BTN_R5), 0),    // right bottom grip
-        (b(5), 1),                // R1
-        (st.hat[1] > 0, 2),       // dpad down
-        (st.hat[0] > 0, 3),       // dpad right
-        (st.hat[0] < 0, 4),       // dpad left
-        (st.hat[1] < 0, 5),       // dpad up
-        (b(6), 6),                // View -> Select
-        (b(9), 7),                // left stick click
-    ]);
-    set(&mut r[4], &[
-        (b(8), 0),                         // Steam
-        (b(11), 1),                        // L4 -> left top grip
-        (b(proto::BTN_L5), 2),             // left bottom grip
-        (b(4), 3),                         // L1
-        (b(proto::BTN_RPAD_TOUCH), 5),
-        (b(proto::BTN_RPAD_CLICK), 6),
-        (tr == 32767, 7),                  // right trigger full pull
-    ]);
+    set(
+        &mut r[2],
+        &[
+            (b(0), 0),              // A
+            (b(1), 1),              // B
+            (b(2), 2),              // X
+            (b(3), 3),              // Y
+            (b(proto::BTN_QAM), 4), // quick access
+            (b(10), 5),             // right stick click
+            (b(7), 6),              // Menu -> Start
+            (b(12), 7),             // R4 -> right top grip
+        ],
+    );
+    set(
+        &mut r[3],
+        &[
+            (b(proto::BTN_R5), 0), // right bottom grip
+            (b(5), 1),             // R1
+            (st.hat[1] > 0, 2),    // dpad down
+            (st.hat[0] > 0, 3),    // dpad right
+            (st.hat[0] < 0, 4),    // dpad left
+            (st.hat[1] < 0, 5),    // dpad up
+            (b(6), 6),             // View -> Select
+            (b(9), 7),             // left stick click
+        ],
+    );
+    set(
+        &mut r[4],
+        &[
+            (b(8), 0),             // Steam
+            (b(11), 1),            // L4 -> left top grip
+            (b(proto::BTN_L5), 2), // left bottom grip
+            (b(4), 3),             // L1
+            (b(proto::BTN_RPAD_TOUCH), 5),
+            (b(proto::BTN_RPAD_CLICK), 6),
+            (tr == 32767, 7), // right trigger full pull
+        ],
+    );
     r[5] = 0x30; // constant flag bits seen on the real device
-    set(&mut r[5], &[
-        (b(proto::BTN_LPAD_TOUCH), 1),
-        (b(proto::BTN_LPAD_CLICK), 2),
-        (tl == 32767, 3),                  // left trigger full pull
-    ]);
+    set(
+        &mut r[5],
+        &[
+            (b(proto::BTN_LPAD_TOUCH), 1),
+            (b(proto::BTN_LPAD_CLICK), 2),
+            (tl == 32767, 3), // left trigger full pull
+        ],
+    );
     let put = |r: &mut [u8], off: usize, v: i16| r[off..off + 2].copy_from_slice(&v.to_le_bytes());
     put(&mut r, 6, tl);
     put(&mut r, 8, tr);
@@ -240,7 +264,14 @@ mod tests {
 
     #[test]
     fn report_layout() {
-        let st = State { buttons: 1 | 1 << 8, axes: [100, -200, 255, 0, 0, 0], hat: [1, 0], pads: [7, -8, 0, 0], accel: [9, 0, 0], ..Default::default() };
+        let st = State {
+            buttons: 1 | 1 << 8,
+            axes: [100, -200, 255, 0, 0, 0],
+            hat: [1, 0],
+            pads: [7, -8, 0, 0],
+            accel: [9, 0, 0],
+            ..Default::default()
+        };
         let r = state_report(7, 0, &st);
         assert_eq!(r[0], 0x42);
         assert_eq!(r[2] & 1, 1); // A
@@ -251,6 +282,31 @@ mod tests {
         assert_eq!(i16::from_le_bytes([r[12], r[13]]), 200);
         assert_eq!(i16::from_le_bytes([r[18], r[19]]), 7); // left pad X
         assert_eq!(i16::from_le_bytes([r[34], r[35]]), 9); // accel
+    }
+
+    /// Idle `0x42` report captured from a real controller: the fields we fill in
+    /// must land at the same offsets with the same encoding.
+    #[test]
+    fn matches_captured_real_report() {
+        const REAL: &str = "42d1000000300000000088fa54010cfe80fe000000000000000000000000c032210075037917cf3bb5ffefff0b007178390dbcfbf9d6";
+        let real: Vec<u8> = (0..REAL.len() / 2)
+            .map(|i| u8::from_str_radix(&REAL[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        // Sticks as sent over the wire are down-positive; the device is up-positive.
+        let st = State {
+            axes: [-1400, -340, 0, -500, 384, 0],
+            accel: [885, 6009, 15311],
+            gyro: [-75, -17, 11],
+            ..Default::default()
+        };
+        let ours = state_report(0xd1, 2175680, &st);
+        assert_eq!(real.len(), ours.len());
+        assert_eq!(
+            &ours[..30],
+            &real[..30],
+            "header, buttons, triggers, sticks, pads"
+        );
+        assert_eq!(&ours[30..46], &real[30..46], "timestamp, accel and gyro");
     }
 
     #[test]

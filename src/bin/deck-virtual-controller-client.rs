@@ -1,12 +1,12 @@
 //! Runs on the Steam Deck: reads the Deck's gamepad and streams its state over UDP.
 
-use evdev::raw_stream::{enumerate as enumerate_raw, RawDevice};
 use evdev::EventSummary;
+use evdev::raw_stream::{RawDevice, enumerate as enumerate_raw};
 use serde::Deserialize;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use steamdeck_as_pc_controller::{config, deck_hid, proto};
+use steamdeck_as_pc_controller::{config, deck_hid, lock, proto};
 
 const APP: &str = "deck-virtual-controller-client";
 
@@ -41,7 +41,8 @@ impl Default for Config {
 const PREFERRED: [&str; 2] = ["Microsoft X-Box 360 pad", "Valve Software Steam Controller"];
 
 fn has_gamepad_buttons(d: &RawDevice) -> bool {
-    d.supported_keys().is_some_and(|k| k.contains(evdev::KeyCode(proto::BUTTONS[0])))
+    d.supported_keys()
+        .is_some_and(|k| k.contains(evdev::KeyCode(proto::BUTTONS[0])))
 }
 
 fn find_device(want: &str) -> Option<(std::path::PathBuf, RawDevice)> {
@@ -54,7 +55,10 @@ fn find_device(want: &str) -> Option<(std::path::PathBuf, RawDevice)> {
     }
     found.retain(|(_, d)| has_gamepad_buttons(d));
     for pref in PREFERRED {
-        if let Some(i) = found.iter().position(|(_, d)| d.name().is_some_and(|n| n.starts_with(pref))) {
+        if let Some(i) = found
+            .iter()
+            .position(|(_, d)| d.name().is_some_and(|n| n.starts_with(pref)))
+        {
             return Some(found.swap_remove(i));
         }
     }
@@ -67,18 +71,21 @@ struct Shared {
 }
 
 fn send(sock: &UdpSocket, shared: &Mutex<Shared>, bump: bool) {
-    let mut s = shared.lock().unwrap();
+    let mut s = lock(shared);
     if bump {
         s.seq = s.seq.wrapping_add(1);
     }
-    let pkt = proto::Packet { seq: s.seq, state: s.state };
+    let pkt = proto::Packet {
+        seq: s.seq,
+        state: s.state,
+    };
     let _ = sock.send(&pkt.encode());
 }
 
 /// View + Menu pressed together: tell the server to release everything, then exit.
 /// The exit code 0 tells the Deck app to close too.
 fn stop_streaming(sock: &UdpSocket, shared: &Mutex<Shared>) -> ! {
-    shared.lock().unwrap().state = proto::State::default();
+    lock(shared).state = proto::State::default();
     for _ in 0..3 {
         send(sock, shared, true);
         std::thread::sleep(Duration::from_millis(20));
@@ -90,7 +97,9 @@ fn stop_streaming(sock: &UdpSocket, shared: &Mutex<Shared>) -> ! {
 fn apply(state: &mut proto::State, ev: evdev::InputEvent, deadzone: i32) -> bool {
     match ev.destructure() {
         EventSummary::Key(_, code, v) => {
-            let Some(bit) = proto::BUTTONS.iter().position(|&c| c == code.0) else { return false };
+            let Some(bit) = proto::BUTTONS.iter().position(|&c| c == code.0) else {
+                return false;
+            };
             let old = state.buttons;
             if v != 0 {
                 state.buttons |= 1 << bit;
@@ -119,28 +128,46 @@ fn apply(state: &mut proto::State, ev: evdev::InputEvent, deadzone: i32) -> bool
     }
 }
 
+/// Print an error and exit with the "bad configuration/environment" status.
+fn fail(msg: &str) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(2);
+}
+
 fn main() {
     let cfg: Config = config::load(APP).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2);
     });
 
-    let sock = UdpSocket::bind("0.0.0.0:0").expect("bind udp socket");
-    sock.connect(&cfg.server_addr).unwrap_or_else(|e| {
-        eprintln!("bad server_addr '{}': {e}", cfg.server_addr);
-        std::process::exit(2);
-    });
+    if cfg.server_addr.contains("PC_ADDRESS") {
+        fail(&format!(
+            "set server_addr in your config.toml (it still holds the placeholder '{}')",
+            cfg.server_addr
+        ));
+    }
+    let sock = UdpSocket::bind("0.0.0.0:0")
+        .unwrap_or_else(|e| fail(&format!("cannot create UDP socket: {e}")));
+    sock.connect(&cfg.server_addr)
+        .unwrap_or_else(|e| fail(&format!("bad server_addr '{}': {e}", cfg.server_addr)));
     eprintln!("sending to {}", cfg.server_addr);
 
-    let shared = Arc::new(Mutex::new(Shared { state: proto::State::default(), seq: 0 }));
+    let shared = Arc::new(Mutex::new(Shared {
+        state: proto::State::default(),
+        seq: 0,
+    }));
 
     {
-        let sock = sock.try_clone().expect("clone socket");
+        let sock = sock
+            .try_clone()
+            .unwrap_or_else(|e| fail(&format!("cannot clone UDP socket: {e}")));
         let shared = shared.clone();
         let every = Duration::from_millis(cfg.heartbeat_ms.max(10));
-        std::thread::spawn(move || loop {
-            std::thread::sleep(every);
-            send(&sock, &shared, false);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(every);
+                send(&sock, &shared, false);
+            }
         });
     }
 
@@ -169,14 +196,16 @@ fn run_hidraw(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, deadzone: i32) -> !
                 eprintln!("cannot open {}", path.display());
                 continue;
             };
+            let Ok(sock) = sock.try_clone() else { continue };
             started.push(path.clone());
-            let sock = sock.try_clone().expect("clone socket");
             let shared = shared.clone();
             let got_data = got_data.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 128];
                 while let Ok(n) = file.read(&mut buf) {
-                    let Some(mut st) = deck_hid::parse_report(&buf[..n]) else { continue };
+                    let Some(mut st) = deck_hid::parse_report(&buf[..n]) else {
+                        continue;
+                    };
                     if !got_data.swap(true, Ordering::Relaxed) {
                         eprintln!("controller data from {}", path.display());
                     }
@@ -189,7 +218,7 @@ fn run_hidraw(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, deadzone: i32) -> !
                         stop_streaming(&sock, &shared);
                     }
                     let changed = {
-                        let mut s = shared.lock().unwrap();
+                        let mut s = lock(&shared);
                         let changed = s.state != st;
                         s.state = st;
                         changed
@@ -227,16 +256,16 @@ fn run_evdev(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, cfg: &Config) -> ! {
             };
             let mut changed = false;
             for ev in events {
-                changed |= apply(&mut shared.lock().unwrap().state, ev, cfg.deadzone);
+                changed |= apply(&mut lock(shared).state, ev, cfg.deadzone);
             }
-            if shared.lock().unwrap().state.is_stop_chord() {
+            if lock(shared).state.is_stop_chord() {
                 stop_streaming(sock, shared);
             }
             if changed {
                 send(sock, shared, true);
             }
         }
-        shared.lock().unwrap().state = proto::State::default();
+        lock(shared).state = proto::State::default();
         send(sock, shared, true);
         std::thread::sleep(Duration::from_secs(1));
     }

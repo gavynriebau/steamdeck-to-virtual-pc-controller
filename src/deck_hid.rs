@@ -65,7 +65,7 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
         }
     }
 
-    let trigger = |off| (i16_at(b, off).max(0) >> 7) as i16; // 0..32767 -> 0..255
+    let trigger = |off| i16_at(b, off).max(0) >> 7; // 0..32767 -> 0..255
     // The Deck reports stick Y as up-positive; evdev expects up-negative.
     let axes = [
         i16_at(b, 48),
@@ -93,7 +93,9 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
 
 /// hidraw nodes belonging to the Deck's built-in controller.
 pub fn find_nodes() -> Vec<std::path::PathBuf> {
-    let Ok(dir) = std::fs::read_dir("/sys/class/hidraw") else { return Vec::new() };
+    let Ok(dir) = std::fs::read_dir("/sys/class/hidraw") else {
+        return Vec::new();
+    };
     let mut nodes: Vec<_> = dir
         .flatten()
         .filter(|e| {
@@ -122,7 +124,13 @@ mod tests {
 
     #[test]
     fn buttons_hat_axes() {
-        let s = parse_report(&report(1 << 7 | 1 << 41 | 1 << 8 | 1 << 10, 1000, 32767, 32767)).unwrap();
+        let s = parse_report(&report(
+            1 << 7 | 1 << 41 | 1 << 8 | 1 << 10,
+            1000,
+            32767,
+            32767,
+        ))
+        .unwrap();
         assert_eq!(s.buttons, 1 | 1 << 11);
         assert_eq!(s.pads, [0; 4]);
         assert_eq!(s.hat, [-1, -1]);
@@ -139,6 +147,9 @@ mod tests {
 
     #[test]
     fn y_min_does_not_overflow() {
-        assert_eq!(parse_report(&report(0, 0, i16::MIN, 0)).unwrap().axes[1], i16::MAX);
+        assert_eq!(
+            parse_report(&report(0, 0, i16::MIN, 0)).unwrap().axes[1],
+            i16::MAX
+        );
     }
 }

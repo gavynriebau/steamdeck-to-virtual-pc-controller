@@ -2,6 +2,10 @@
 name = "steamdeck-as-pc-controller"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Use a Steam Deck as a controller for a Linux PC: streams its inputs to an emulated Steam Controller or Xbox pad"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 evdev = "0.13.2"

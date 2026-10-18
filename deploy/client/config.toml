@@ -5,7 +5,8 @@
 source = "hidraw"
 
 # Address of the PC running deck-virtual-controller-server.
-server_addr = "192.168.86.212:24800"
+# Replace PC_ADDRESS with the hostname or IP of the PC (the installer does this).
+server_addr = "PC_ADDRESS:24800"
 
 # evdev path (/dev/input/eventN) or exact device name. Empty = auto-detect
 # (prefers Steam Input's "Microsoft X-Box 360 pad", then the raw Deck controller).

@@ -12,8 +12,14 @@ pub fn load<T: DeserializeOwned + Default>(app: &str) -> Result<T, String> {
     let mut explicit = None;
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--config" => explicit = Some(PathBuf::from(args.next().ok_or("--config needs a path")?)),
-            other => return Err(format!("unknown argument '{other}' (usage: {app} [--config <path>])")),
+            "--config" => {
+                explicit = Some(PathBuf::from(args.next().ok_or("--config needs a path")?))
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument '{other}' (usage: {app} [--config <path>])"
+                ));
+            }
         }
     }
 
@@ -22,7 +28,12 @@ pub fn load<T: DeserializeOwned + Default>(app: &str) -> Result<T, String> {
         None => {
             let mut candidates = vec![PathBuf::from("config.toml")];
             if let Some(home) = std::env::var_os("HOME") {
-                candidates.push(PathBuf::from(home).join(".config").join(app).join("config.toml"));
+                candidates.push(
+                    PathBuf::from(home)
+                        .join(".config")
+                        .join(app)
+                        .join("config.toml"),
+                );
             }
             match candidates.into_iter().find(|p| p.is_file()) {
                 Some(p) => p,
