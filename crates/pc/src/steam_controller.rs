@@ -220,6 +220,25 @@ fn gate_imu(state: &State, imu_enabled: bool) -> State {
     gated
 }
 
+/// Turns the current state into the stream of numbered, timestamped input
+/// reports the host expects. One call per report; time is passed in.
+struct Streamer {
+    start: Instant,
+    seq: u32,
+}
+
+impl Streamer {
+    fn new(start: Instant) -> Self {
+        Streamer { start, seq: 0 }
+    }
+
+    fn tick(&mut self, now: Instant, state: &State, imu_enabled: bool) -> [u8; REPORT_LEN] {
+        self.seq = self.seq.wrapping_add(1);
+        let micros = now.duration_since(self.start).as_micros() as u32;
+        state_report(self.seq, micros, &gate_imu(state, imu_enabled))
+    }
+}
+
 fn stream(
     device: UhidDevice,
     state: Arc<Mutex<State>>,
@@ -227,14 +246,13 @@ fn stream(
     interval: Duration,
 ) {
     std::thread::spawn(move || {
-        let start = Instant::now();
-        let mut seq = 0u32;
+        let mut streamer = Streamer::new(Instant::now());
         loop {
             std::thread::sleep(interval);
-            seq = seq.wrapping_add(1);
-            let st = gate_imu(&lock(&state), lock(&device_state).imu_enabled());
-            let ts = start.elapsed().as_micros() as u32;
-            if let Err(e) = device.send_input(&state_report(seq, ts, &st)) {
+            let current = *lock(&state);
+            let imu_enabled = lock(&device_state).imu_enabled();
+            let report = streamer.tick(Instant::now(), &current, imu_enabled);
+            if let Err(e) = device.send_input(&report) {
                 eprintln!("uhid write failed: {e}");
                 return;
             }
@@ -539,5 +557,46 @@ mod tests {
         );
         assert_eq!(parse_output_report(&[0x82, 0]), None);
         assert_eq!(parse_output_report(&[0x81]), None, "truncated");
+    }
+
+    #[test]
+    fn the_streamer_numbers_reports_and_timestamps_them_from_the_clock_passed_in() {
+        let t0 = Instant::now();
+        let mut streamer = Streamer::new(t0);
+        let st = State::default();
+        let first = streamer.tick(t0 + Duration::from_millis(4), &st, true);
+        let second = streamer.tick(t0 + Duration::from_millis(8), &st, true);
+        assert_eq!((first[1], second[1]), (1, 2), "sequence number counts up");
+        let ts = |r: [u8; REPORT_LEN]| u32::from_le_bytes([r[30], r[31], r[32], r[33]]);
+        assert_eq!(
+            (ts(first), ts(second)),
+            (4_000, 8_000),
+            "microseconds since start"
+        );
+    }
+
+    #[test]
+    fn the_streamer_zeroes_motion_data_while_the_host_has_it_off() {
+        let t0 = Instant::now();
+        let mut streamer = Streamer::new(t0);
+        let mut st = State::default();
+        st.imu.accel = [300, -400, 16000];
+        st.imu.gyro = [5, 6, 7];
+        let on = streamer.tick(t0, &st, true);
+        let off = streamer.tick(t0, &st, false);
+        assert_eq!(i16::from_le_bytes([on[34], on[35]]), 300);
+        assert_eq!(&off[34..46], &[0u8; 12], "accel and gyro bytes are zero");
+    }
+
+    #[test]
+    fn the_report_sequence_byte_wraps_like_the_real_device() {
+        let t0 = Instant::now();
+        let mut streamer = Streamer::new(t0);
+        let st = State::default();
+        let mut last = [0u8; REPORT_LEN];
+        for _ in 0..256 {
+            last = streamer.tick(t0, &st, true);
+        }
+        assert_eq!(last[1], 0, "the 256th report wraps the one-byte counter");
     }
 }

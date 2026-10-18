@@ -43,6 +43,40 @@ impl Link {
     }
 }
 
+/// What one step of the monitor saw.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Observation {
+    /// The ack carried by the datagram, if it was one.
+    pub ack: Option<Ack>,
+    /// `Some(reachable)` when the server became reachable or unreachable.
+    pub change: Option<bool>,
+}
+
+/// One step of the monitor's loop: a datagram that arrived (or none within the
+/// poll interval) and the time. The thread in [`spawn_monitor`] only supplies those.
+pub struct Monitor {
+    link: Link,
+}
+
+impl Monitor {
+    pub fn new(now: Instant, timeout: Duration) -> Self {
+        Monitor {
+            link: Link::new(now, timeout),
+        }
+    }
+
+    pub fn observe(&mut self, datagram: Option<&[u8]>, now: Instant) -> Observation {
+        let ack = datagram.and_then(Ack::decode);
+        if ack.is_some() {
+            self.link.ack_received(now);
+        }
+        Observation {
+            ack,
+            change: self.link.check(now),
+        }
+    }
+}
+
 /// Watch the (connected) UDP socket for acks in the background and call
 /// `on_change(true/false)` when the server becomes reachable or unreachable,
 /// and `on_ack` for every ack.
@@ -54,17 +88,16 @@ pub fn spawn_monitor(
 ) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
     std::thread::spawn(move || {
-        let mut link = Link::new(Instant::now(), timeout);
+        let mut monitor = Monitor::new(Instant::now(), timeout);
         let mut buf = [0u8; 16];
         loop {
             // Errors (timeouts, ICMP "port unreachable") just mean no ack.
-            if let Ok(n) = sock.recv(&mut buf)
-                && let Some(ack) = Ack::decode(&buf[..n])
-            {
-                link.ack_received(Instant::now());
+            let datagram = sock.recv(&mut buf).ok().map(|n| &buf[..n]);
+            let seen = monitor.observe(datagram, Instant::now());
+            if let Some(ack) = seen.ack {
                 on_ack(ack);
             }
-            if let Some(reachable) = link.check(Instant::now()) {
+            if let Some(reachable) = seen.change {
                 on_change(reachable);
             }
         }
@@ -116,5 +149,59 @@ mod tests {
         let mut l = Link::new(t0, T);
         l.ack_received(at(t0, 2.9));
         assert_eq!(l.check(at(t0, 3.5)), Some(true));
+    }
+
+    fn ack_bytes(seq: u32, imu_wanted: bool) -> [u8; Ack::LEN] {
+        Ack { seq, imu_wanted }.encode()
+    }
+
+    #[test]
+    fn an_ack_is_handed_on_and_makes_the_server_reachable() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        let seen = m.observe(Some(&ack_bytes(7, false)), at(t0, 0.1));
+        assert_eq!(
+            seen,
+            Observation {
+                ack: Some(Ack {
+                    seq: 7,
+                    imu_wanted: false
+                }),
+                change: Some(true)
+            }
+        );
+    }
+
+    #[test]
+    fn other_datagrams_are_not_acks_and_do_not_count() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        let seen = m.observe(Some(b"hello"), at(t0, 0.1));
+        assert_eq!(
+            seen,
+            Observation {
+                ack: None,
+                change: None
+            }
+        );
+        let seen = m.observe(None, at(t0, 3.5));
+        assert_eq!(
+            seen.change,
+            Some(false),
+            "junk never counted as a sign of life"
+        );
+    }
+
+    #[test]
+    fn silence_turns_reachable_into_unreachable_and_an_ack_turns_it_back() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        m.observe(Some(&ack_bytes(1, true)), at(t0, 0.1));
+        assert_eq!(m.observe(None, at(t0, 3.3)).change, Some(false));
+        assert_eq!(m.observe(None, at(t0, 4.0)).change, None, "reported once");
+        assert_eq!(
+            m.observe(Some(&ack_bytes(2, true)), at(t0, 4.5)).change,
+            Some(true)
+        );
     }
 }
