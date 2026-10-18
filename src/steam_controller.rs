@@ -7,7 +7,9 @@ use crate::controller::{Button, State, TRIGGER_MAX, axis};
 use crate::lock;
 use crate::sink::Sink;
 use crate::uhid::{BUS_USB, Handler, Identity, UhidDevice};
+use std::collections::BTreeMap;
 use std::io;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -45,20 +47,116 @@ pub fn identity(name: &str) -> Identity {
     }
 }
 
-/// The feature-report handshake: the host writes a command (`[1, command, len,
-/// payload...]`) and then reads the answer.
-#[derive(Default)]
+/// Setting register that selects which IMU data the controller sends. Steam
+/// writes `0x18` (raw accelerometer + gyro) to turn it on and `0` to turn it off.
+pub const SETTING_IMU_MODE: u8 = 0x30;
+const IMU_ENABLED_BITS: u16 = 0x18;
+
+/// Settings the host has written. Unwritten settings read as their defaults.
+#[derive(Default, Debug)]
+pub struct DeviceState {
+    settings: BTreeMap<u8, u16>,
+}
+
+impl DeviceState {
+    pub fn set(&mut self, register: u8, value: u16) {
+        self.settings.insert(register, value);
+    }
+
+    /// Whether to send accelerometer and gyro data. On until the host turns it off.
+    pub fn imu_enabled(&self) -> bool {
+        self.settings
+            .get(&SETTING_IMU_MODE)
+            .is_none_or(|v| v & IMU_ENABLED_BITS != 0)
+    }
+}
+
+/// Something the host asked of the controller that the Deck could act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceEvent {
+    /// The host switched the IMU on or off.
+    ImuEnabled(bool),
+    /// Rumble motors: left and right speed.
+    Rumble { left: u16, right: u16 },
+    /// A haptic pulse on one trackpad (`side` 0 or 1).
+    Pulse {
+        side: u8,
+        on: u16,
+        off: u16,
+        repeat: u16,
+    },
+}
+
+/// The `(register, value)` pairs in a settings write
+/// (`[1, 0x87, length, (register, value lo, value hi)...]`).
+fn parse_settings_write(report: &[u8]) -> Vec<(u8, u16)> {
+    if report.get(1) != Some(&0x87) {
+        return Vec::new();
+    }
+    let len = (*report.get(2).unwrap_or(&0) as usize).min(report.len().saturating_sub(3));
+    report[3..3 + len]
+        .chunks_exact(3)
+        .map(|t| (t[0], u16::from_le_bytes([t[1], t[2]])))
+        .collect()
+}
+
+/// Decode an output report (`0x80` rumble, `0x81` pulse); other reports are ignored.
+fn parse_output_report(report: &[u8]) -> Option<DeviceEvent> {
+    let u16_at = |i: usize| Some(u16::from_le_bytes([*report.get(i)?, *report.get(i + 1)?]));
+    match report.first()? {
+        0x80 => Some(DeviceEvent::Rumble {
+            left: u16_at(3)?,
+            right: u16_at(6)?,
+        }),
+        0x81 => Some(DeviceEvent::Pulse {
+            side: *report.get(1)?,
+            on: u16_at(2)?,
+            off: u16_at(4)?,
+            repeat: u16_at(6)?,
+        }),
+        _ => None,
+    }
+}
+
+/// The host's side of the conversation: feature-report handshake (the host
+/// writes a command and then reads the answer), settings, and output reports.
 struct Handshake {
     last_command: Vec<u8>,
+    device: Arc<Mutex<DeviceState>>,
+    events: Option<Sender<DeviceEvent>>,
+}
+
+impl Handshake {
+    fn emit(&self, event: DeviceEvent) {
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
+    }
 }
 
 impl Handler for Handshake {
     fn set_report(&mut self, report: &[u8]) {
         self.last_command = report.to_vec();
+        for (register, value) in parse_settings_write(report) {
+            let mut device = lock(&self.device);
+            let before = device.imu_enabled();
+            device.set(register, value);
+            let after = device.imu_enabled();
+            drop(device);
+            if before != after {
+                self.emit(DeviceEvent::ImuEnabled(after));
+            }
+        }
     }
 
     fn get_report(&mut self, _report_number: u8) -> Vec<u8> {
         feature_reply(&self.last_command)
+    }
+
+    fn output_report(&mut self, report: &[u8]) {
+        if let Some(event) = parse_output_report(report) {
+            self.emit(event);
+        }
     }
 }
 
@@ -71,9 +169,30 @@ pub struct SteamSink {
 
 impl SteamSink {
     pub fn create(name: &str) -> io::Result<Self> {
-        let device = UhidDevice::create(&identity(name), Handshake::default())?;
+        Self::start(name, None)
+    }
+
+    /// Like [`SteamSink::create`], and sends what the host asks of the
+    /// controller (IMU on/off, rumble, pulses) to `events`.
+    pub fn create_with_events(name: &str, events: Sender<DeviceEvent>) -> io::Result<Self> {
+        Self::start(name, Some(events))
+    }
+
+    fn start(name: &str, events: Option<Sender<DeviceEvent>>) -> io::Result<Self> {
+        let device_state = Arc::new(Mutex::new(DeviceState::default()));
+        let handshake = Handshake {
+            last_command: Vec::new(),
+            device: device_state.clone(),
+            events,
+        };
+        let device = UhidDevice::create(&identity(name), handshake)?;
         let shared = Arc::new(Mutex::new(State::default()));
-        stream(device, shared.clone(), Duration::from_millis(4));
+        stream(
+            device,
+            shared.clone(),
+            device_state,
+            Duration::from_millis(4),
+        );
         Ok(SteamSink { shared })
     }
 }
@@ -84,14 +203,29 @@ impl Sink for SteamSink {
     }
 }
 
-fn stream(device: UhidDevice, state: Arc<Mutex<State>>, interval: Duration) {
+/// The state as the host should see it: IMU data is zeroed while the host has it off.
+fn gate_imu(state: &State, imu_enabled: bool) -> State {
+    let mut gated = *state;
+    if !imu_enabled {
+        gated.accel = [0; 3];
+        gated.gyro = [0; 3];
+    }
+    gated
+}
+
+fn stream(
+    device: UhidDevice,
+    state: Arc<Mutex<State>>,
+    device_state: Arc<Mutex<DeviceState>>,
+    interval: Duration,
+) {
     std::thread::spawn(move || {
         let start = Instant::now();
         let mut seq = 0u32;
         loop {
             std::thread::sleep(interval);
             seq = seq.wrapping_add(1);
-            let st = *lock(&state);
+            let st = gate_imu(&lock(&state), lock(&device_state).imu_enabled());
             let ts = start.elapsed().as_micros() as u32;
             if let Err(e) = device.send_input(&state_report(seq, ts, &st)) {
                 eprintln!("uhid write failed: {e}");
@@ -256,9 +390,19 @@ mod tests {
         assert_eq!(&ours[30..46], &real[30..46], "timestamp, accel and gyro");
     }
 
+    impl Handshake {
+        fn new_for_test() -> Self {
+            Handshake {
+                last_command: Vec::new(),
+                device: Arc::new(Mutex::new(DeviceState::default())),
+                events: None,
+            }
+        }
+    }
+
     #[test]
     fn serial_query_gets_the_serial() {
-        let mut h = Handshake::default();
+        let mut h = Handshake::new_for_test();
         h.set_report(&[1, 0xAE, 0x15, 0x01]);
         let r = h.get_report(1);
         assert_eq!(r.len(), FEATURE_LEN);
@@ -268,7 +412,7 @@ mod tests {
 
     #[test]
     fn attributes_query_gets_the_captured_reply() {
-        let mut h = Handshake::default();
+        let mut h = Handshake::new_for_test();
         h.set_report(&[1, 0x83, 0]);
         assert_eq!(
             &h.get_report(1)[..ATTRIBUTES_REPLY.len()],
@@ -278,14 +422,14 @@ mod tests {
 
     #[test]
     fn unknown_commands_are_echoed_with_zero_length() {
-        let mut h = Handshake::default();
+        let mut h = Handshake::new_for_test();
         h.set_report(&[1, 0xC1, 0x10]);
         assert_eq!(&h.get_report(1)[..3], &[1, 0xC1, 0]);
     }
 
     #[test]
     fn reads_answer_the_most_recent_command() {
-        let mut h = Handshake::default();
+        let mut h = Handshake::new_for_test();
         h.set_report(&[1, 0x83, 0]);
         h.set_report(&[1, 0xAE, 0x15, 0x01]);
         assert_eq!(h.get_report(1)[1], 0xAE);
@@ -296,5 +440,92 @@ mod tests {
         let id = identity("x");
         assert_eq!((id.vendor, id.product, id.bus), (0x28de, 0x1302, BUS_USB));
         assert_eq!(id.report_descriptor.len(), 372);
+    }
+
+    // Writes captured from the Steam client talking to the emulated controller.
+    #[test]
+    fn settings_writes_parse_into_register_value_pairs() {
+        assert_eq!(
+            parse_settings_write(&[1, 0x87, 3, 0x32, 0x84, 0x03]),
+            [(0x32, 0x0384)]
+        );
+        assert_eq!(
+            parse_settings_write(&[1, 0x87, 6, 0x30, 0x18, 0x00, 0x2e, 0x00, 0x00]),
+            [(0x30, 0x18), (0x2e, 0)]
+        );
+        assert!(
+            parse_settings_write(&[1, 0x83, 0]).is_empty(),
+            "not a settings write"
+        );
+        assert_eq!(
+            parse_settings_write(&[1, 0x87, 9, 0x30, 0x18]),
+            [],
+            "length beyond the report"
+        );
+    }
+
+    #[test]
+    fn imu_defaults_on_and_follows_the_host() {
+        let mut d = DeviceState::default();
+        assert!(d.imu_enabled());
+        d.set(SETTING_IMU_MODE, 0);
+        assert!(!d.imu_enabled());
+        d.set(SETTING_IMU_MODE, 0x18);
+        assert!(d.imu_enabled());
+        d.set(0x2e, 0);
+        assert!(d.imu_enabled(), "other registers do not affect the IMU");
+    }
+
+    #[test]
+    fn imu_data_is_zeroed_while_the_host_has_it_off() {
+        let mut st = State::default();
+        st.accel = [1, 2, 3];
+        st.gyro = [4, 5, 6];
+        assert_eq!(gate_imu(&st, true), st);
+        let off = gate_imu(&st, false);
+        assert_eq!((off.accel, off.gyro), ([0; 3], [0; 3]));
+    }
+
+    #[test]
+    fn handshake_reports_imu_toggles_once_per_change() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut h = Handshake {
+            last_command: Vec::new(),
+            device: Arc::new(Mutex::new(DeviceState::default())),
+            events: Some(tx),
+        };
+        h.set_report(&[1, 0x87, 3, 0x30, 0x00, 0x00]); // off
+        h.set_report(&[1, 0x87, 3, 0x30, 0x00, 0x00]); // still off: no event
+        h.set_report(&[1, 0x87, 3, 0x30, 0x18, 0x00]); // on
+        let events: Vec<_> = rx.try_iter().collect();
+        assert_eq!(
+            events,
+            [
+                DeviceEvent::ImuEnabled(false),
+                DeviceEvent::ImuEnabled(true)
+            ]
+        );
+    }
+
+    #[test]
+    fn output_reports_become_haptic_events() {
+        assert_eq!(
+            parse_output_report(&[0x81, 1, 0x10, 0, 0x20, 0, 3, 0]),
+            Some(DeviceEvent::Pulse {
+                side: 1,
+                on: 0x10,
+                off: 0x20,
+                repeat: 3
+            })
+        );
+        assert_eq!(
+            parse_output_report(&[0x80, 0, 0, 0x34, 0x12, 0, 0x78, 0x56, 0]),
+            Some(DeviceEvent::Rumble {
+                left: 0x1234,
+                right: 0x5678
+            })
+        );
+        assert_eq!(parse_output_report(&[0x82, 0]), None);
+        assert_eq!(parse_output_report(&[0x81]), None, "truncated");
     }
 }

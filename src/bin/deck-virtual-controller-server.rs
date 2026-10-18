@@ -10,7 +10,7 @@ use steamdeck_as_pc_controller::serve::{Event, serve_once};
 use steamdeck_as_pc_controller::session::Session;
 use steamdeck_as_pc_controller::sink::Sink;
 use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::steam_controller::SteamSink;
+use steamdeck_as_pc_controller::steam_controller::{DeviceEvent, SteamSink};
 use steamdeck_as_pc_controller::xbox_sink::XboxSink;
 
 const APP: &str = "deck-virtual-controller-server";
@@ -57,12 +57,24 @@ fn open_sink(cfg: &Config) -> Box<dyn Sink> {
                 &format!("cannot create uinput device: {e} (need write access to /dev/uinput)"),
             )
         })),
-        ControllerType::Steam => Box::new(SteamSink::create(&cfg.name).unwrap_or_else(|e| {
-            die(
-                EXIT_ENV,
-                &format!("cannot create uhid device: {e} (need write access to /dev/uhid)"),
-            )
-        })),
+        ControllerType::Steam => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sink = SteamSink::create_with_events(&cfg.name, tx).unwrap_or_else(|e| {
+                die(
+                    EXIT_ENV,
+                    &format!("cannot create uhid device: {e} (need write access to /dev/uhid)"),
+                )
+            });
+            // Rumble and trackpad pulses are not forwarded to the Deck yet.
+            std::thread::spawn(move || {
+                for event in rx {
+                    if let DeviceEvent::ImuEnabled(on) = event {
+                        eprintln!("host turned the gyro {}", if on { "on" } else { "off" });
+                    }
+                }
+            });
+            Box::new(sink)
+        }
     }
 }
 
