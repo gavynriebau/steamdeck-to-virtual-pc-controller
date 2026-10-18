@@ -12,6 +12,7 @@ valid|status controller=ok|controller|ok
 valid|status controller=missing|controller|missing
 valid|status server=reachable|server|reachable
 valid|status server=unreachable|server|unreachable
+valid|status server=incompatible|server|incompatible
 ignored|
 ignored|sending to 192.168.1.20:24800
 ignored|controller data from /dev/hidraw2

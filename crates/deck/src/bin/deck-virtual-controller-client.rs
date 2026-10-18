@@ -2,14 +2,14 @@
 //! the PC over UDP.
 
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
-use dvc_common::timing;
+use dvc_common::{proto, timing};
 use dvc_deck::config::{Config, Source};
 use dvc_deck::deck_hid::HidrawDiscovery;
 use dvc_deck::evdev_source::EvdevDiscovery;
 use dvc_deck::link;
 use dvc_deck::publisher::{Publisher, RunEnd, Tuning, run};
 use dvc_deck::source::{self, Discovery};
-use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
+use dvc_deck::status::{EXIT_STOPPED_BY_USER, ServerLink, Status, print_to_stdout};
 use std::net::UdpSocket;
 use std::sync::atomic::Ordering;
 
@@ -44,13 +44,18 @@ fn main() {
         timing::LINK_TIMEOUT,
         {
             let report = report.clone();
-            move |reachable| {
-                if reachable {
-                    eprintln!("server reachable");
-                } else {
-                    eprintln!("no reply from the server (check server_addr and the PC's firewall)");
+            move |link| {
+                match link {
+                    ServerLink::Reachable => eprintln!("server reachable"),
+                    ServerLink::Unreachable => eprintln!(
+                        "no reply from the server (check server_addr and the PC's firewall)"
+                    ),
+                    ServerLink::Incompatible => eprintln!(
+                        "the server speaks a different protocol version (this Deck speaks {}); update the PC server to match",
+                        char::from(proto::VERSION)
+                    ),
                 }
-                report(Status::Server(reachable));
+                report(Status::Server(link));
             }
         },
         move |ack| {

@@ -1,7 +1,8 @@
 //! Does the server hear us? UDP never says, so the server acks now and then and
 //! this tracks whether acks keep arriving.
 
-use dvc_common::proto::Ack;
+use crate::status::ServerLink;
+use dvc_common::proto::{Ack, DecodeError};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
@@ -48,42 +49,65 @@ impl Link {
 pub struct Observation {
     /// The ack carried by the datagram, if it was one.
     pub ack: Option<Ack>,
-    /// `Some(reachable)` when the server became reachable or unreachable.
-    pub change: Option<bool>,
+    /// Set when what we know about the server changed.
+    pub change: Option<ServerLink>,
 }
 
 /// One step of the monitor's loop: a datagram that arrived (or none within the
 /// poll interval) and the time. The thread in [`spawn_monitor`] only supplies those.
 pub struct Monitor {
     link: Link,
+    /// The protocol version byte of the last ack that was refused for its version.
+    incompatible_with: Option<u8>,
 }
 
 impl Monitor {
     pub fn new(now: Instant, timeout: Duration) -> Self {
         Monitor {
             link: Link::new(now, timeout),
+            incompatible_with: None,
         }
     }
 
     pub fn observe(&mut self, datagram: Option<&[u8]>, now: Instant) -> Observation {
-        let ack = datagram.and_then(Ack::decode);
-        if ack.is_some() {
-            self.link.ack_received(now);
+        let mut ack = None;
+        let mut change = None;
+        match datagram.map(Ack::try_decode) {
+            Some(Ok(a)) => {
+                self.incompatible_with = None;
+                self.link.ack_received(now);
+                ack = Some(a);
+            }
+            // A server answering in another protocol version is there, but not
+            // usable: say so once instead of letting it look unreachable.
+            Some(Err(DecodeError::Version(v))) => {
+                if self.incompatible_with != Some(v) {
+                    self.incompatible_with = Some(v);
+                    change = Some(ServerLink::Incompatible);
+                }
+            }
+            Some(Err(_)) | None => {}
         }
-        Observation {
-            ack,
-            change: self.link.check(now),
+        if let Some(reachable) = self.link.check(now)
+            && self.incompatible_with.is_none()
+        {
+            change = Some(if reachable {
+                ServerLink::Reachable
+            } else {
+                ServerLink::Unreachable
+            });
         }
+        Observation { ack, change }
     }
 }
 
 /// Watch the (connected) UDP socket for acks in the background and call
-/// `on_change(true/false)` when the server becomes reachable or unreachable,
+/// `on_change` when the server becomes reachable, unreachable or incompatible,
 /// and `on_ack` for every ack.
 pub fn spawn_monitor(
     sock: UdpSocket,
     timeout: Duration,
-    mut on_change: impl FnMut(bool) + Send + 'static,
+    mut on_change: impl FnMut(ServerLink) + Send + 'static,
     mut on_ack: impl FnMut(Ack) + Send + 'static,
 ) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
@@ -97,8 +121,8 @@ pub fn spawn_monitor(
             if let Some(ack) = seen.ack {
                 on_ack(ack);
             }
-            if let Some(reachable) = seen.change {
-                on_change(reachable);
+            if let Some(link) = seen.change {
+                on_change(link);
             }
         }
     });
@@ -167,7 +191,7 @@ mod tests {
                     seq: 7,
                     imu_wanted: false
                 }),
-                change: Some(true)
+                change: Some(ServerLink::Reachable)
             }
         );
     }
@@ -187,7 +211,7 @@ mod tests {
         let seen = m.observe(None, at(t0, 3.5));
         assert_eq!(
             seen.change,
-            Some(false),
+            Some(ServerLink::Unreachable),
             "junk never counted as a sign of life"
         );
     }
@@ -197,11 +221,62 @@ mod tests {
         let t0 = Instant::now();
         let mut m = Monitor::new(t0, T);
         m.observe(Some(&ack_bytes(1, true)), at(t0, 0.1));
-        assert_eq!(m.observe(None, at(t0, 3.3)).change, Some(false));
+        assert_eq!(
+            m.observe(None, at(t0, 3.3)).change,
+            Some(ServerLink::Unreachable)
+        );
         assert_eq!(m.observe(None, at(t0, 4.0)).change, None, "reported once");
         assert_eq!(
             m.observe(Some(&ack_bytes(2, true)), at(t0, 4.5)).change,
-            Some(true)
+            Some(ServerLink::Reachable)
         );
+    }
+
+    fn ack_bytes_with_version(version: u8) -> [u8; Ack::LEN] {
+        let mut b = ack_bytes(1, true);
+        b[3] = version;
+        b
+    }
+
+    #[test]
+    fn a_server_with_another_protocol_version_is_incompatible_not_unreachable() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        let old = ack_bytes_with_version(b'2');
+        let seen = m.observe(Some(&old), at(t0, 0.1));
+        assert_eq!(
+            seen,
+            Observation {
+                ack: None,
+                change: Some(ServerLink::Incompatible)
+            }
+        );
+        assert_eq!(
+            m.observe(Some(&old), at(t0, 0.4)).change,
+            None,
+            "reported once"
+        );
+        // However long it goes on, it never turns into 'unreachable'.
+        assert_eq!(m.observe(None, at(t0, 10.0)).change, None);
+    }
+
+    #[test]
+    fn a_matching_ack_after_a_mismatch_makes_the_server_reachable() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        m.observe(Some(&ack_bytes_with_version(b'2')), at(t0, 0.1));
+        let seen = m.observe(Some(&ack_bytes(5, true)), at(t0, 0.5));
+        assert_eq!(seen.change, Some(ServerLink::Reachable));
+        assert_eq!(seen.ack.map(|a| a.seq), Some(5));
+    }
+
+    #[test]
+    fn a_new_mismatch_after_recovery_is_reported_again() {
+        let t0 = Instant::now();
+        let mut m = Monitor::new(t0, T);
+        m.observe(Some(&ack_bytes_with_version(b'2')), at(t0, 0.1));
+        m.observe(Some(&ack_bytes(1, true)), at(t0, 0.2));
+        let seen = m.observe(Some(&ack_bytes_with_version(b'9')), at(t0, 0.3));
+        assert_eq!(seen.change, Some(ServerLink::Incompatible));
     }
 }

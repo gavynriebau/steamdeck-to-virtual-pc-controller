@@ -68,6 +68,11 @@ class Describe(unittest.TestCase):
         self.assertEqual((v.headline, v.level), ("PC not responding", "warn"))
         self.assertIn("pc:24800", v.detail)
 
+    def test_a_server_with_another_protocol_version_says_so(self):
+        v = ds.describe({"target": "pc:24800", "server": "incompatible"})
+        self.assertEqual((v.headline, v.level), ("PC speaks another version", "warn"))
+        self.assertIn("Update the PC server", v.detail)
+
     def test_missing_controller_is_a_warning_and_wins_over_the_server(self):
         v = ds.describe({"target": "pc:1", "controller": "missing", "server": "unreachable"})
         self.assertEqual((v.headline, v.level), ("Controller not found", "warn"))

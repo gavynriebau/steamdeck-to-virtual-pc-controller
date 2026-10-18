@@ -3,7 +3,7 @@
 //! This is the whole interface between the two processes:
 //!
 //! * **stdout** carries one line per status change, `status <key>=<value>`:
-//!   `target=<host:port>`, `controller=ok|missing`, `server=reachable|unreachable`.
+//!   `target=<host:port>`, `controller=ok|missing`, `server=reachable|unreachable|incompatible`.
 //!   Anything else on stdout is ignored. Human-readable logs go to stderr.
 //! * **Exit status** [`EXIT_STOPPED_BY_USER`] (0) means the user pressed
 //!   View + Menu and the app should close too. Any other status is a failure and
@@ -17,14 +17,25 @@ use std::sync::Arc;
 /// Exit status of a client the user asked to stop.
 pub const EXIT_STOPPED_BY_USER: i32 = 0;
 
+/// What the Deck knows about the server it sends to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerLink {
+    /// Acks arrive.
+    Reachable,
+    /// No acks for a while.
+    Unreachable,
+    /// The server answers, but with another protocol version.
+    Incompatible,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     /// Where the client is sending to.
     Target(String),
     /// Whether Deck controller data is arriving.
     Controller(bool),
-    /// Whether the server's acks are arriving.
-    Server(bool),
+    /// Whether the server's acks are arriving, and speak our protocol version.
+    Server(ServerLink),
 }
 
 impl fmt::Display for Status {
@@ -33,8 +44,9 @@ impl fmt::Display for Status {
             Status::Target(t) => write!(f, "status target={t}"),
             Status::Controller(true) => write!(f, "status controller=ok"),
             Status::Controller(false) => write!(f, "status controller=missing"),
-            Status::Server(true) => write!(f, "status server=reachable"),
-            Status::Server(false) => write!(f, "status server=unreachable"),
+            Status::Server(ServerLink::Reachable) => write!(f, "status server=reachable"),
+            Status::Server(ServerLink::Unreachable) => write!(f, "status server=unreachable"),
+            Status::Server(ServerLink::Incompatible) => write!(f, "status server=incompatible"),
         }
     }
 }
@@ -46,8 +58,9 @@ impl Status {
             Status::Target(t) => ("target", t.clone()),
             Status::Controller(true) => ("controller", "ok".into()),
             Status::Controller(false) => ("controller", "missing".into()),
-            Status::Server(true) => ("server", "reachable".into()),
-            Status::Server(false) => ("server", "unreachable".into()),
+            Status::Server(ServerLink::Reachable) => ("server", "reachable".into()),
+            Status::Server(ServerLink::Unreachable) => ("server", "unreachable".into()),
+            Status::Server(ServerLink::Incompatible) => ("server", "incompatible".into()),
         }
     }
 
@@ -58,8 +71,9 @@ impl Status {
             ("target", t) if !t.is_empty() => Some(Status::Target(t.to_string())),
             ("controller", "ok") => Some(Status::Controller(true)),
             ("controller", "missing") => Some(Status::Controller(false)),
-            ("server", "reachable") => Some(Status::Server(true)),
-            ("server", "unreachable") => Some(Status::Server(false)),
+            ("server", "reachable") => Some(Status::Server(ServerLink::Reachable)),
+            ("server", "unreachable") => Some(Status::Server(ServerLink::Unreachable)),
+            ("server", "incompatible") => Some(Status::Server(ServerLink::Incompatible)),
             _ => None,
         }
     }
@@ -89,8 +103,8 @@ mod tests {
             Status::Target("192.168.1.20:24800".into()),
             Status::Controller(true),
             Status::Controller(false),
-            Status::Server(true),
-            Status::Server(false),
+            Status::Server(ServerLink::Reachable),
+            Status::Server(ServerLink::Unreachable),
         ] {
             assert_eq!(Status::parse(&s.to_string()), Some(s));
         }
@@ -116,7 +130,7 @@ mod tests {
     fn surrounding_whitespace_is_tolerated() {
         assert_eq!(
             Status::parse("  status server=reachable \n"),
-            Some(Status::Server(true))
+            Some(Status::Server(ServerLink::Reachable))
         );
     }
 
@@ -128,7 +142,7 @@ mod tests {
             "status controller=missing"
         );
         assert_eq!(
-            Status::Server(false).to_string(),
+            Status::Server(ServerLink::Unreachable).to_string(),
             "status server=unreachable"
         );
         assert_eq!(EXIT_STOPPED_BY_USER, 0);
@@ -185,8 +199,9 @@ mod tests {
         for s in [
             Status::Controller(true),
             Status::Controller(false),
-            Status::Server(true),
-            Status::Server(false),
+            Status::Server(ServerLink::Reachable),
+            Status::Server(ServerLink::Unreachable),
+            Status::Server(ServerLink::Incompatible),
         ] {
             assert!(
                 listed.contains(&s.to_string().as_str()),

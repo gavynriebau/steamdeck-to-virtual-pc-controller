@@ -118,6 +118,8 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 
 ## Known limitations
 
+- The Deck and the PC must run the same version: the packet and ack formats carry a protocol version, and a mismatch
+  shows on the Deck as "PC speaks another version" (and in the server log) instead of silently not working.
 - **No authentication or encryption.** Any machine that can reach UDP 24800 on the PC can send controller input.
   Only run it on a network you trust (or firewall the port to the Deck's address).
 - The **Steam button** (and the `...` button) on the Deck still opens the Deck's own Steam menu. Steam handles those

@@ -9,8 +9,12 @@ use crate::controller::State;
 #[cfg(test)]
 use crate::controller::{Imu, Pad};
 
-pub const MAGIC: [u8; 4] = *b"DVC2";
-pub const ACK_MAGIC: [u8; 4] = *b"DVA2";
+/// The protocol version, the last byte of both magics. Bump it whenever the
+/// layout of a packet or an ack changes, so a mismatched pair says so instead
+/// of one side silently dropping the other's datagrams.
+pub const VERSION: u8 = b'3';
+pub const MAGIC: [u8; 4] = *b"DVC3";
+pub const ACK_MAGIC: [u8; 4] = *b"DVA3";
 pub const DEFAULT_PORT: u16 = 24800;
 /// A buffer this big holds any datagram of this protocol.
 pub const MAX_DATAGRAM: usize = 64;
@@ -149,7 +153,7 @@ impl std::fmt::Display for DecodeError {
             DecodeError::Version(v) => write!(
                 f,
                 "protocol version {} (this build speaks {}); update the other side",
-                *v as char, MAGIC[3] as char
+                *v as char, VERSION as char
             ),
             DecodeError::Length(n) => write!(f, "wrong packet size ({n} bytes)"),
         }
@@ -214,10 +218,21 @@ impl Ack {
     }
 
     pub fn decode(b: &[u8]) -> Option<Ack> {
-        if b.len() != Ack::LEN || b[..4] != ACK_MAGIC {
-            return None;
+        Ack::try_decode(b).ok()
+    }
+
+    /// Like [`Ack::decode`], but says why a datagram was refused.
+    pub fn try_decode(b: &[u8]) -> Result<Ack, DecodeError> {
+        if b.len() < 4 || b[0..3] != ACK_MAGIC[0..3] {
+            return Err(DecodeError::NotOurs);
         }
-        Some(Ack {
+        if b[0..4] != ACK_MAGIC {
+            return Err(DecodeError::Version(b[3]));
+        }
+        if b.len() != Ack::LEN {
+            return Err(DecodeError::Length(b.len()));
+        }
+        Ok(Ack {
             seq: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
             imu_wanted: b[8] & Ack::IMU_WANTED != 0,
         })
@@ -315,7 +330,7 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert_eq!(Packet::decode(&vec![0; packet_len()]), None);
-        assert_eq!(Packet::decode(b"DVC2"), None);
+        assert_eq!(Packet::decode(&MAGIC), None);
     }
 
     #[test]
@@ -332,7 +347,7 @@ mod tests {
             imu_wanted: true,
         };
         assert_eq!(Packet::try_decode(&ack.encode()), Err(DecodeError::NotOurs));
-        assert_eq!(Ack::decode(b"DVA2"), None);
+        assert_eq!(Ack::decode(&ACK_MAGIC), None);
         assert_eq!(Ack::decode(&[0; Ack::LEN]), None);
     }
 
@@ -347,7 +362,7 @@ mod tests {
     /// The documented wire layout, spelled out byte by byte (built independently
     /// of the code, with Python's struct module): magic, seq, buttons, 6 axes,
     /// hat, pad x/y (left then right), pad pressure, accel, gyro, all little-endian.
-    const GOLDEN: &str = "44564332443322115555050018fcd0070300fcff05000600ff016f0022ff4d0144fee803d0070a00ecff1e00d8ff3200c4ff";
+    const GOLDEN: &str = "44564333443322115555050018fcd0070300fcff05000600ff016f0022ff4d0144fee803d0070a00ecff1e00d8ff3200c4ff";
 
     fn golden_packet() -> Packet {
         let mut state = State::from_button_bits(0x0005_5555);
@@ -387,5 +402,33 @@ mod tests {
     #[test]
     fn the_documented_bytes_decode_to_the_expected_packet() {
         assert_eq!(Packet::decode(&unhex(GOLDEN)), Some(golden_packet()));
+    }
+
+    #[test]
+    fn packets_and_acks_share_one_version() {
+        assert_eq!(MAGIC[3], VERSION);
+        assert_eq!(ACK_MAGIC[3], VERSION);
+        assert_eq!(&MAGIC[..3], b"DVC");
+        assert_eq!(&ACK_MAGIC[..3], b"DVA");
+    }
+
+    #[test]
+    fn acks_are_refused_with_a_reason_like_packets() {
+        assert_eq!(Ack::try_decode(b"hello"), Err(DecodeError::NotOurs));
+        assert_eq!(Ack::try_decode(b""), Err(DecodeError::NotOurs));
+        // The layout of the previous protocol version: 8 bytes under "DVA2".
+        let mut old = [0u8; 8];
+        old[..4].copy_from_slice(b"DVA2");
+        assert_eq!(Ack::try_decode(&old), Err(DecodeError::Version(b'2')));
+        let mut short = [0u8; 5];
+        short[..4].copy_from_slice(&ACK_MAGIC);
+        assert_eq!(Ack::try_decode(&short), Err(DecodeError::Length(5)));
+    }
+
+    #[test]
+    fn a_packet_from_the_previous_version_is_a_version_error_not_garbage() {
+        let mut old = [0u8; 50];
+        old[..4].copy_from_slice(b"DVC2");
+        assert_eq!(Packet::try_decode(&old), Err(DecodeError::Version(b'2')));
     }
 }

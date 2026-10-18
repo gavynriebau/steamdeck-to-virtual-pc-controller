@@ -3,7 +3,7 @@ can show. No GUI code lives here, so it is tested with a fake client.
 
 The contract with the client (see src/status.rs, keep both in step):
   * stdout lines `status <key>=<value>` with target=<host:port>,
-    controller=ok|missing, server=reachable|unreachable; other lines are ignored;
+    controller=ok|missing, server=reachable|unreachable|incompatible; other lines are ignored;
   * exit status EXIT_STOPPED_BY_USER means View + Menu was pressed and the app
     should close; any other exit status is a failure and the client is restarted.
 """
@@ -46,6 +46,12 @@ def describe(state, exit_code=None):
         return View("Starting...", "", "ok")
     if state.get("controller") == "missing":
         return View("Controller not found", target, "warn")
+    if state.get("server") == "incompatible":
+        return View(
+            "PC speaks another version",
+            f"{target}\nUpdate the PC server to match this Deck",
+            "warn",
+        )
     if state.get("server") == "unreachable":
         return View("PC not responding", f"{target}\nCheck the address and the PC's firewall", "warn")
     return View("Streaming to PC", target, "ok")
