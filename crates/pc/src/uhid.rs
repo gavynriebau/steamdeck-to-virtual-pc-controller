@@ -14,7 +14,6 @@ const MAX_DATA: usize = 4096;
 // Event types (`enum uhid_event_type`).
 const UHID_DESTROY: u32 = 1;
 const UHID_START: u32 = 2;
-const UHID_OUTPUT: u32 = 6;
 const UHID_GET_REPORT: u32 = 9;
 const UHID_GET_REPORT_REPLY: u32 = 10;
 const UHID_CREATE2: u32 = 11;
@@ -41,8 +40,6 @@ pub trait Handler: Send + 'static {
     fn set_report(&mut self, report: &[u8]);
     /// The host reads a feature report; the reply must start with the report ID.
     fn get_report(&mut self, report_number: u8) -> Vec<u8>;
-    /// The host wrote an output report (for example a haptic pulse).
-    fn output_report(&mut self, _report: &[u8]) {}
 }
 
 fn get_u16(b: &[u8], off: usize) -> u16 {
@@ -107,11 +104,6 @@ pub fn respond(event: &[u8], handler: &mut dyn Handler) -> Option<Vec<u8>> {
             reply[12..12 + size].copy_from_slice(&data[..size]);
             Some(reply)
         }
-        UHID_OUTPUT => {
-            let size = (get_u16(event, 4 + MAX_DATA) as usize).min(MAX_DATA);
-            handler.output_report(&event[4..4 + size]);
-            None
-        }
         _ => None,
     }
 }
@@ -167,7 +159,6 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         set: Vec<Vec<u8>>,
-        output: Vec<Vec<u8>>,
         asked: Vec<u8>,
     }
 
@@ -178,9 +169,6 @@ mod tests {
         fn get_report(&mut self, n: u8) -> Vec<u8> {
             self.asked.push(n);
             vec![n, 0xAA, 0xBB]
-        }
-        fn output_report(&mut self, report: &[u8]) {
-            self.output.push(report.to_vec());
         }
     }
 
@@ -248,20 +236,10 @@ mod tests {
     }
 
     #[test]
-    fn output_report_reaches_the_handler_and_needs_no_reply() {
-        let mut h = Recorder::default();
-        let mut ev = new_event(UHID_OUTPUT);
-        ev[4..7].copy_from_slice(&[0x81, 5, 6]);
-        put_u16(&mut ev, 4 + MAX_DATA, 3);
-        assert!(respond(&ev, &mut h).is_none());
-        assert_eq!(h.output, [vec![0x81, 5, 6]]);
-    }
-
-    #[test]
     fn other_events_are_ignored() {
         let mut h = Recorder::default();
         assert!(respond(&new_event(UHID_START), &mut h).is_none());
-        assert!(h.set.is_empty() && h.output.is_empty() && h.asked.is_empty());
+        assert!(h.set.is_empty() && h.asked.is_empty());
     }
 
     #[test]

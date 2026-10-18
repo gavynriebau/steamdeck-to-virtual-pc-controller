@@ -3,7 +3,7 @@
 //! same HID device a real wired controller presents.
 //!
 //! * `identity`: what it claims to be (USB IDs, report descriptor, captured replies);
-//! * `device`: the host's conversation with it (settings, handshake, haptic events);
+//! * `device`: the host's conversation with it (settings, handshake);
 //! * `report`: the `0x42` input report and its streamer;
 //! * this module wires them to a UHID device and presents the result as a
 //!   [`Sink`].
@@ -12,7 +12,7 @@ mod device;
 mod identity;
 mod report;
 
-pub use device::{DeviceEvent, DeviceState, SETTING_IMU_MODE};
+pub use device::{DeviceState, SETTING_IMU_MODE};
 pub use identity::identity;
 pub use report::state_report;
 
@@ -23,7 +23,6 @@ use dvc_common::controller::State;
 use dvc_common::lock;
 use report::Streamer;
 use std::io;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,18 +36,8 @@ pub struct SteamSink {
 
 impl SteamSink {
     pub fn create(name: &str) -> io::Result<Self> {
-        Self::start(name, None)
-    }
-
-    /// Like [`SteamSink::create`], and sends what the host asks of the
-    /// controller (IMU on/off, rumble, pulses) to `events`.
-    pub fn create_with_events(name: &str, events: Sender<DeviceEvent>) -> io::Result<Self> {
-        Self::start(name, Some(events))
-    }
-
-    fn start(name: &str, events: Option<Sender<DeviceEvent>>) -> io::Result<Self> {
         let device_state = Arc::new(Mutex::new(DeviceState::default()));
-        let handshake = Handshake::new(device_state.clone(), events);
+        let handshake = Handshake::new(device_state.clone());
         let device = UhidDevice::create(&identity(name), handshake)?;
         let shared = Arc::new(Mutex::new(State::default()));
         stream(

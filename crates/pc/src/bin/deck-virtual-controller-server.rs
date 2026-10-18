@@ -7,7 +7,7 @@ use dvc_pc::config::{Config, ControllerType};
 use dvc_pc::serve::{Acker, Event, serve_once};
 use dvc_pc::session::Session;
 use dvc_pc::sink::Sink;
-use dvc_pc::steam_controller::{DeviceEvent, SteamSink};
+use dvc_pc::steam_controller::SteamSink;
 use dvc_pc::xbox_sink::XboxSink;
 use std::net::UdpSocket;
 
@@ -21,24 +21,12 @@ fn open_sink(cfg: &Config) -> Box<dyn Sink> {
                 &format!("cannot create uinput device: {e} (need write access to /dev/uinput)"),
             )
         })),
-        ControllerType::Steam => {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let sink = SteamSink::create_with_events(&cfg.name, tx).unwrap_or_else(|e| {
-                die(
-                    EXIT_ENV,
-                    &format!("cannot create uhid device: {e} (need write access to /dev/uhid)"),
-                )
-            });
-            // Rumble and trackpad pulses are not forwarded to the Deck yet.
-            std::thread::spawn(move || {
-                for event in rx {
-                    if let DeviceEvent::ImuEnabled(on) = event {
-                        eprintln!("host turned the gyro {}", if on { "on" } else { "off" });
-                    }
-                }
-            });
-            Box::new(sink)
-        }
+        ControllerType::Steam => Box::new(SteamSink::create(&cfg.name).unwrap_or_else(|e| {
+            die(
+                EXIT_ENV,
+                &format!("cannot create uhid device: {e} (need write access to /dev/uhid)"),
+            )
+        })),
     }
 }
 
