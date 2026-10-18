@@ -89,6 +89,7 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 | `device` | auto | (evdev only) device path or name |
 | `heartbeat_ms` | `100` | resend interval when nothing changes |
 | `deadzone` | `0` | stick deadzone in raw units (sticks span ±32767) |
+| `stick_noise` | `128` | stick movement smaller than this since the last value sent is jitter and is not sent; `0` sends every change |
 
 ## How it works
 
@@ -124,6 +125,9 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 - Gyro, accelerometer and trackpad values are passed through without recalibration, assuming the Deck and the
   Steam Controller sensors use the same scaling. The Deck's right trackpad pressure range differs slightly.
 - Rumble and haptics from the PC are not sent back to the Deck.
+- While the PC uses the gyro, an idle Deck still sends about 160 packets per second (sensor noise). When the PC doesn't
+  use it (Xbox type, or the host switched the gyro off) the Deck stops sending motion data and an idle Deck sends
+  only its 10 per second heartbeat.
 
 ## Uninstall
 

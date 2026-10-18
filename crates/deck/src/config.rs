@@ -26,6 +26,9 @@ pub struct Config {
     pub heartbeat_ms: u64,
     /// Stick deadzone, in raw units (axes are -32768..32767).
     pub deadzone: i32,
+    /// Stick movement smaller than this, in raw units, since the last value sent
+    /// is treated as jitter and not sent.
+    pub stick_noise: i32,
 }
 
 impl Default for Config {
@@ -36,6 +39,7 @@ impl Default for Config {
             device: String::new(),
             heartbeat_ms: 100,
             deadzone: 0,
+            stick_noise: 128,
         }
     }
 }
@@ -98,6 +102,7 @@ mod tests {
         assert_eq!(example.device, default.device);
         assert_eq!(example.heartbeat_ms, default.heartbeat_ms);
         assert_eq!(example.deadzone, default.deadzone);
+        assert_eq!(example.stick_noise, default.stick_noise);
     }
 
     #[test]
@@ -119,6 +124,10 @@ mod tests {
             format!("`{}`", d.heartbeat_ms)
         );
         assert_eq!(readme_default("deadzone"), format!("`{}`", d.deadzone));
+        assert_eq!(
+            readme_default("stick_noise"),
+            format!("`{}`", d.stick_noise)
+        );
         // These two have no meaningful literal default.
         assert_eq!(readme_default("server_addr"), "none, required");
         assert_eq!(readme_default("device"), "auto");
@@ -146,7 +155,7 @@ mod tests {
         }
         assert_eq!(
             keys.len(),
-            5,
+            6,
             "an example key with no matching setting: {keys:?}"
         );
     }

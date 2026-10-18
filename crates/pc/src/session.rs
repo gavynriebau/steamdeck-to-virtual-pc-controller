@@ -15,7 +15,10 @@ pub enum Accept {
         new_client: bool,
         seq: u32,
     },
-    /// A late or duplicate packet from the current client: ignore it.
+    /// A repeat of the packet last accepted (the Deck's heartbeat): nothing to
+    /// apply, but the client is alive and worth acking.
+    Heartbeat { seq: u32 },
+    /// A late packet from the current client, older than one already accepted: ignore it.
     Stale,
     /// Not usable. `first` is true the first time this sender sends this kind of
     /// bad packet, so callers can log it once instead of per packet.
@@ -50,7 +53,11 @@ impl Session {
             .last_seq
             .is_none_or(|last| proto::is_newer(packet.seq, last));
         if !new_client && !fresh {
-            return Accept::Stale;
+            return if self.last_seq == Some(packet.seq) {
+                Accept::Heartbeat { seq: packet.seq }
+            } else {
+                Accept::Stale
+            };
         }
         self.client = Some(from);
         self.last_seq = Some(packet.seq);
@@ -109,10 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn late_and_duplicate_packets_are_stale() {
+    fn late_packets_are_stale_and_repeats_are_heartbeats() {
         let mut s = Session::new();
         s.accept(addr(1), &packet(10, None));
-        assert_eq!(s.accept(addr(1), &packet(10, None)), Accept::Stale);
+        assert_eq!(
+            s.accept(addr(1), &packet(10, None)),
+            Accept::Heartbeat { seq: 10 }
+        );
         assert_eq!(s.accept(addr(1), &packet(9, None)), Accept::Stale);
     }
 
@@ -188,6 +198,9 @@ mod tests {
         let mut s = Session::new();
         s.accept(addr(1), &packet(10, None));
         s.accept(addr(1), b"junk");
-        assert_eq!(s.accept(addr(1), &packet(10, None)), Accept::Stale);
+        assert_eq!(
+            s.accept(addr(1), &packet(10, None)),
+            Accept::Heartbeat { seq: 10 }
+        );
     }
 }

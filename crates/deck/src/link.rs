@@ -44,11 +44,13 @@ impl Link {
 }
 
 /// Watch the (connected) UDP socket for acks in the background and call
-/// `on_change(true/false)` when the server becomes reachable or unreachable.
+/// `on_change(true/false)` when the server becomes reachable or unreachable,
+/// and `on_ack` for every ack.
 pub fn spawn_monitor(
     sock: UdpSocket,
     timeout: Duration,
     mut on_change: impl FnMut(bool) + Send + 'static,
+    mut on_ack: impl FnMut(Ack) + Send + 'static,
 ) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
     std::thread::spawn(move || {
@@ -57,9 +59,10 @@ pub fn spawn_monitor(
         loop {
             // Errors (timeouts, ICMP "port unreachable") just mean no ack.
             if let Ok(n) = sock.recv(&mut buf)
-                && Ack::decode(&buf[..n]).is_some()
+                && let Some(ack) = Ack::decode(&buf[..n])
             {
                 link.ack_received(Instant::now());
+                on_ack(ack);
             }
             if let Some(reachable) = link.check(Instant::now()) {
                 on_change(reachable);

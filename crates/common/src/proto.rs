@@ -192,19 +192,24 @@ impl Packet {
     }
 }
 
-/// The server's "I hear you": echoes the sequence number it last accepted.
+/// The server's "I hear you": echoes the sequence number it last accepted, and
+/// says whether it can use the Deck's motion sensor data (the Xbox pad never can;
+/// the Steam Controller can while the host has its gyro switched on).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ack {
     pub seq: u32,
+    pub imu_wanted: bool,
 }
 
 impl Ack {
-    pub const LEN: usize = 8;
+    pub const LEN: usize = 9;
+    const IMU_WANTED: u8 = 1;
 
     pub fn encode(&self) -> [u8; Ack::LEN] {
         let mut b = [0u8; Ack::LEN];
         b[..4].copy_from_slice(&ACK_MAGIC);
-        b[4..].copy_from_slice(&self.seq.to_le_bytes());
+        b[4..8].copy_from_slice(&self.seq.to_le_bytes());
+        b[8] = if self.imu_wanted { Ack::IMU_WANTED } else { 0 };
         b
     }
 
@@ -214,6 +219,7 @@ impl Ack {
         }
         Some(Ack {
             seq: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+            imu_wanted: b[8] & Ack::IMU_WANTED != 0,
         })
     }
 }
@@ -314,8 +320,17 @@ mod tests {
 
     #[test]
     fn ack_round_trips_and_is_not_a_packet() {
-        let ack = Ack { seq: 0xabcd_1234 };
-        assert_eq!(Ack::decode(&ack.encode()), Some(ack));
+        for imu_wanted in [true, false] {
+            let ack = Ack {
+                seq: 0xabcd_1234,
+                imu_wanted,
+            };
+            assert_eq!(Ack::decode(&ack.encode()), Some(ack));
+        }
+        let ack = Ack {
+            seq: 1,
+            imu_wanted: true,
+        };
         assert_eq!(Packet::try_decode(&ack.encode()), Err(DecodeError::NotOurs));
         assert_eq!(Ack::decode(b"DVA2"), None);
         assert_eq!(Ack::decode(&[0; Ack::LEN]), None);

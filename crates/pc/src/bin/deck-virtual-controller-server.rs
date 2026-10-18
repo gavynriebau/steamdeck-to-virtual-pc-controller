@@ -69,7 +69,11 @@ fn main() {
                 eprintln!("client timed out, releasing inputs")
             }
             Event::RecvError(e) => eprintln!("recv error: {e}"),
-            Event::Applied | Event::Stale | Event::RejectedAgain | Event::TimedOut { .. } => {}
+            Event::Applied
+            | Event::Heartbeat
+            | Event::Stale
+            | Event::RejectedAgain
+            | Event::TimedOut { .. } => {}
         }
     }
 }

@@ -16,7 +16,9 @@ pub enum Event {
     Connected(SocketAddr),
     /// A normal packet; its state was applied.
     Applied,
-    /// A late or duplicate packet; nothing was applied.
+    /// A repeat of the last packet (the Deck's heartbeat); nothing was applied.
+    Heartbeat,
+    /// A late packet; nothing was applied.
     Stale,
     /// A bad packet, reported once per sender and kind; nothing was applied.
     Rejected {
@@ -36,6 +38,7 @@ pub enum Event {
 pub struct Acker {
     interval: Duration,
     last: Option<Instant>,
+    last_imu_wanted: bool,
 }
 
 impl Acker {
@@ -43,17 +46,29 @@ impl Acker {
         Acker {
             interval,
             last: None,
+            last_imu_wanted: true,
         }
     }
 
-    fn due(&mut self, now: Instant) -> bool {
-        let due = self
-            .last
-            .is_none_or(|t| now.duration_since(t) >= self.interval);
+    /// An ack is due once per interval, and straight away when the host's
+    /// answer about motion data has changed since the last one.
+    fn due(&mut self, now: Instant, imu_wanted: bool) -> bool {
+        let due = imu_wanted != self.last_imu_wanted
+            || self
+                .last
+                .is_none_or(|t| now.duration_since(t) >= self.interval);
         if due {
             self.last = Some(now);
+            self.last_imu_wanted = imu_wanted;
         }
         due
+    }
+}
+
+fn send_ack_if_due(sock: &UdpSocket, to: SocketAddr, seq: u32, sink: &dyn Sink, acker: &mut Acker) {
+    let imu_wanted = sink.wants_imu();
+    if acker.due(Instant::now(), imu_wanted) {
+        let _ = sock.send_to(&Ack { seq, imu_wanted }.encode(), to);
     }
 }
 
@@ -74,14 +89,17 @@ pub fn serve_once(
                 seq,
             } => {
                 sink.apply(&state);
-                if acker.due(Instant::now()) {
-                    let _ = sock.send_to(&Ack { seq }.encode(), from);
-                }
+                send_ack_if_due(sock, from, seq, sink, acker);
                 if new_client {
                     Event::Connected(from)
                 } else {
                     Event::Applied
                 }
+            }
+            Accept::Heartbeat { seq } => {
+                // A quiet Deck sends only heartbeats, and still needs its acks.
+                send_ack_if_due(sock, from, seq, sink, acker);
+                Event::Heartbeat
             }
             Accept::Stale => Event::Stale,
             Accept::Rejected {
@@ -178,7 +196,7 @@ mod tests {
         let (mut session, mut sink, mut acker) = fixture();
         send(&client, 5, None);
         serve_once(&server, &mut session, &mut sink, &mut acker);
-        send(&client, 5, Some(Button::A)); // duplicate sequence number
+        send(&client, 3, Some(Button::A)); // older than one already accepted
         assert!(matches!(
             serve_once(&server, &mut session, &mut sink, &mut acker),
             Event::Stale
@@ -206,7 +224,13 @@ mod tests {
         serve_once(&server, &mut session, &mut sink, &mut acker);
         let mut buf = [0u8; 16];
         let n = client.recv(&mut buf).unwrap();
-        assert_eq!(Ack::decode(&buf[..n]), Some(Ack { seq: 7 }));
+        assert_eq!(
+            Ack::decode(&buf[..n]),
+            Some(Ack {
+                seq: 7,
+                imu_wanted: true
+            })
+        );
 
         // Within the interval: applied, but no second ack.
         send(&client, 8, None);
@@ -232,8 +256,72 @@ mod tests {
     fn acker_waits_for_the_interval() {
         let mut a = Acker::new(Duration::from_secs(1));
         let t0 = Instant::now();
-        assert!(a.due(t0));
-        assert!(!a.due(t0 + Duration::from_millis(999)));
-        assert!(a.due(t0 + Duration::from_secs(1)));
+        assert!(a.due(t0, true));
+        assert!(!a.due(t0 + Duration::from_millis(999), true));
+        assert!(a.due(t0 + Duration::from_secs(1), true));
+    }
+
+    #[test]
+    fn a_change_in_the_hosts_imu_wish_is_acked_at_once() {
+        let mut a = Acker::new(Duration::from_secs(60));
+        let t0 = Instant::now();
+        assert!(a.due(t0, true));
+        assert!(
+            !a.due(t0 + Duration::from_millis(10), true),
+            "nothing changed"
+        );
+        assert!(
+            a.due(t0 + Duration::from_millis(20), false),
+            "the host turned the gyro off"
+        );
+        assert!(!a.due(t0 + Duration::from_millis(30), false));
+        assert!(a.due(t0 + Duration::from_millis(40), true), "and back on");
+    }
+
+    #[test]
+    fn the_ack_tells_the_deck_what_the_sink_wants() {
+        let (server, client) = pair();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let (mut session, mut sink, mut acker) = fixture();
+        sink.imu_wanted = false;
+        send(&client, 1, None);
+        serve_once(&server, &mut session, &mut sink, &mut acker);
+        let mut buf = [0u8; 16];
+        let n = client.recv(&mut buf).unwrap();
+        assert!(!Ack::decode(&buf[..n]).unwrap().imu_wanted);
+    }
+
+    #[test]
+    fn a_quiet_deck_sending_only_heartbeats_keeps_getting_acks() {
+        let (server, client) = pair();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let (mut session, mut sink) = (Session::new(), MemorySink::default());
+        let mut acker = Acker::new(Duration::from_millis(30));
+        let mut buf = [0u8; 16];
+
+        send(&client, 4, None);
+        serve_once(&server, &mut session, &mut sink, &mut acker);
+        client.recv(&mut buf).unwrap(); // the first ack
+
+        // The same packet again and again, like the Deck's heartbeat at rest.
+        let mut acks = 0;
+        for _ in 0..4 {
+            std::thread::sleep(Duration::from_millis(35));
+            send(&client, 4, None);
+            assert!(matches!(
+                serve_once(&server, &mut session, &mut sink, &mut acker),
+                Event::Heartbeat
+            ));
+            if let Ok(n) = client.recv(&mut buf) {
+                assert_eq!(Ack::decode(&buf[..n]).unwrap().seq, 4);
+                acks += 1;
+            }
+        }
+        assert!(acks >= 3, "only {acks} acks for 4 heartbeats");
+        assert_eq!(sink.applied.len(), 1, "heartbeats apply nothing");
     }
 }

@@ -17,3 +17,8 @@ heartbeat_ms = 100
 
 # Stick deadzone in raw units (sticks span -32768..32767).
 deadzone = 0
+
+# Stick movement smaller than this (raw units) since the last value sent is
+# treated as sensor jitter and not sent. A resting stick jitters by a unit or two
+# on most reports (about 90 units wide on the Deck this was tuned on); 0 sends every change.
+stick_noise = 128

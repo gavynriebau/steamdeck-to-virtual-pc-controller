@@ -3,10 +3,11 @@
 
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
 use dvc_deck::config::{Config, Source};
-use dvc_deck::publisher::{Publisher, RunEnd, run};
+use dvc_deck::publisher::{Publisher, RunEnd, Tuning, run};
 use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
 use dvc_deck::{deck_hid, evdev_source, link};
 use std::net::UdpSocket;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const APP: &str = "deck-virtual-controller-client";
@@ -26,20 +27,42 @@ fn main() {
     let report = print_to_stdout();
     report(Status::Target(cfg.server_addr.clone()));
 
-    match sock.try_clone() {
-        Ok(listener) => {
+    let mut publisher = Publisher::new(
+        sock.try_clone()
+            .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot clone UDP socket: {e}"))),
+        Tuning {
+            deadzone: cfg.deadzone,
+            stick_noise: cfg.stick_noise,
+        },
+    );
+    let imu_wanted = publisher.imu_wanted_flag();
+    link::spawn_monitor(
+        sock,
+        Duration::from_secs(3),
+        {
             let report = report.clone();
-            link::spawn_monitor(listener, Duration::from_secs(3), move |reachable| {
+            move |reachable| {
                 if reachable {
                     eprintln!("server reachable");
                 } else {
                     eprintln!("no reply from the server (check server_addr and the PC's firewall)");
                 }
                 report(Status::Server(reachable));
-            })
-        }
-        Err(e) => eprintln!("cannot watch for server replies: {e}"),
-    }
+            }
+        },
+        move |ack| {
+            if imu_wanted.swap(ack.imu_wanted, Ordering::Relaxed) != ack.imu_wanted {
+                eprintln!(
+                    "server {} the motion sensors",
+                    if ack.imu_wanted {
+                        "wants"
+                    } else {
+                        "does not need"
+                    }
+                );
+            }
+        },
+    );
 
     let (tx, rx) = std::sync::mpsc::channel();
     match cfg.source {
@@ -47,7 +70,6 @@ fn main() {
         Source::Evdev => evdev_source::spawn(cfg.device.clone(), tx, report),
     }
 
-    let mut publisher = Publisher::new(sock, cfg.deadzone);
     let heartbeat = Duration::from_millis(cfg.heartbeat_ms.max(10));
     match run(&rx, &mut publisher, heartbeat) {
         RunEnd::Stopped => {

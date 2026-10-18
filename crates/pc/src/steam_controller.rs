@@ -165,6 +165,7 @@ impl Handler for Handshake {
 /// drops a controller that goes quiet.
 pub struct SteamSink {
     shared: Arc<Mutex<State>>,
+    device: Arc<Mutex<DeviceState>>,
 }
 
 impl SteamSink {
@@ -190,16 +191,23 @@ impl SteamSink {
         stream(
             device,
             shared.clone(),
-            device_state,
+            device_state.clone(),
             Duration::from_millis(4),
         );
-        Ok(SteamSink { shared })
+        Ok(SteamSink {
+            shared,
+            device: device_state,
+        })
     }
 }
 
 impl Sink for SteamSink {
     fn apply(&mut self, state: &State) {
         *lock(&self.shared) = *state;
+    }
+
+    fn wants_imu(&self) -> bool {
+        lock(&self.device).imu_enabled()
     }
 }
 

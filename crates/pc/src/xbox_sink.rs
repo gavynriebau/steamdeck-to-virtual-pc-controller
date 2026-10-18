@@ -108,6 +108,11 @@ impl Sink for XboxSink {
             Err(e) => eprintln!("emit failed: {e}"),
         }
     }
+
+    /// An Xbox pad has no motion sensors, so the Deck need not send any.
+    fn wants_imu(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
