@@ -5,7 +5,7 @@
 
 use crate::sink::Sink;
 use crate::uhid::{BUS_USB, Handler, Identity, UhidDevice};
-use dvc_common::controller::{Button, State, TRIGGER_MAX, axis};
+use dvc_common::controller::{Button, Imu, State, TRIGGER_MAX, axis};
 use dvc_common::lock;
 use std::collections::BTreeMap;
 use std::io;
@@ -207,8 +207,7 @@ impl Sink for SteamSink {
 fn gate_imu(state: &State, imu_enabled: bool) -> State {
     let mut gated = *state;
     if !imu_enabled {
-        gated.accel = [0; 3];
-        gated.gyro = [0; 3];
+        gated.imu = Imu::default();
     }
     gated
 }
@@ -326,19 +325,19 @@ pub fn state_report(seq: u32, ts_us: u32, st: &State) -> [u8; REPORT_LEN] {
     put(&mut r, 14, st.axes[axis::RIGHT_X]);
     put(&mut r, 16, st.axes[axis::RIGHT_Y].saturating_neg());
     // Trackpads (already up-positive) and their pressure.
-    put(&mut r, 18, st.pads[0]);
-    put(&mut r, 20, st.pads[1]);
-    r[22..24].copy_from_slice(&st.pad_pressure[0].to_le_bytes());
-    put(&mut r, 24, st.pads[2]);
-    put(&mut r, 26, st.pads[3]);
-    r[28..30].copy_from_slice(&st.pad_pressure[1].to_le_bytes());
+    put(&mut r, 18, st.left_pad.x);
+    put(&mut r, 20, st.left_pad.y);
+    r[22..24].copy_from_slice(&st.left_pad.pressure.to_le_bytes());
+    put(&mut r, 24, st.right_pad.x);
+    put(&mut r, 26, st.right_pad.y);
+    r[28..30].copy_from_slice(&st.right_pad.pressure.to_le_bytes());
     r[30..34].copy_from_slice(&ts_us.to_le_bytes());
     // IMU: the real device lays accel/gyro out as X, Z, Y. The Deck's sensor
     // uses the same units, so values are passed through.
-    for (i, v) in st.accel.iter().enumerate() {
+    for (i, v) in st.imu.accel.iter().enumerate() {
         put(&mut r, 34 + i * 2, *v);
     }
-    for (i, v) in st.gyro.iter().enumerate() {
+    for (i, v) in st.imu.gyro.iter().enumerate() {
         put(&mut r, 40 + i * 2, *v);
     }
     r
@@ -353,8 +352,9 @@ mod tests {
         let mut st = State::default().with(Button::A).with(Button::Steam);
         st.axes = [100, -200, 255, 0, 0, 0];
         st.hat = [1, 0];
-        st.pads = [7, -8, 0, 0];
-        st.accel = [9, 0, 0];
+        st.left_pad.x = 7;
+        st.left_pad.y = -8;
+        st.imu.accel = [9, 0, 0];
         let r = state_report(7, 0, &st);
         assert_eq!(r[0], 0x42);
         assert_eq!(r[2] & 1, 1); // A
@@ -378,8 +378,10 @@ mod tests {
         // Sticks as sent over the wire are down-positive; the device is up-positive.
         let mut st = State::default();
         st.axes = [-1400, -340, 0, -500, 384, 0];
-        st.accel = [885, 6009, 15311];
-        st.gyro = [-75, -17, 11];
+        st.imu = Imu {
+            accel: [885, 6009, 15311],
+            gyro: [-75, -17, 11],
+        };
         let ours = state_report(0xd1, 2175680, &st);
         assert_eq!(real.len(), ours.len());
         assert_eq!(
@@ -479,11 +481,13 @@ mod tests {
     #[test]
     fn imu_data_is_zeroed_while_the_host_has_it_off() {
         let mut st = State::default();
-        st.accel = [1, 2, 3];
-        st.gyro = [4, 5, 6];
+        st.imu = Imu {
+            accel: [1, 2, 3],
+            gyro: [4, 5, 6],
+        };
         assert_eq!(gate_imu(&st, true), st);
         let off = gate_imu(&st, false);
-        assert_eq!((off.accel, off.gyro), ([0; 3], [0; 3]));
+        assert_eq!(off.imu, Imu::default());
     }
 
     #[test]

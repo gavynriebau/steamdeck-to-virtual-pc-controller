@@ -6,6 +6,8 @@
 //! decoding and the packet length all follow from it.
 
 use crate::controller::State;
+#[cfg(test)]
+use crate::controller::{Imu, Pad};
 
 pub const MAGIC: [u8; 4] = *b"DVC2";
 pub const ACK_MAGIC: [u8; 4] = *b"DVA2";
@@ -17,6 +19,12 @@ pub const MAX_DATAGRAM: usize = 64;
 /// reads or writes the values it is handed, depending on the implementation.
 trait Fields {
     fn u32(&mut self, v: &mut u32);
+    fn i16(&mut self, v: &mut i16) {
+        self.i16s(std::slice::from_mut(v));
+    }
+    fn u16(&mut self, v: &mut u16) {
+        self.u16s(std::slice::from_mut(v));
+    }
     fn i16s(&mut self, v: &mut [i16]);
     fn u16s(&mut self, v: &mut [u16]);
     fn i8s(&mut self, v: &mut [i8]);
@@ -31,10 +39,15 @@ fn visit_fields(f: &mut impl Fields, seq: &mut u32, state: &mut State) {
     state.set_button_bits(buttons);
     f.i16s(&mut state.axes);
     f.i8s(&mut state.hat);
-    f.i16s(&mut state.pads);
-    f.u16s(&mut state.pad_pressure);
-    f.i16s(&mut state.accel);
-    f.i16s(&mut state.gyro);
+    // Pad positions first (left x, y, right x, y), then both pressures.
+    f.i16(&mut state.left_pad.x);
+    f.i16(&mut state.left_pad.y);
+    f.i16(&mut state.right_pad.x);
+    f.i16(&mut state.right_pad.y);
+    f.u16(&mut state.left_pad.pressure);
+    f.u16(&mut state.right_pad.pressure);
+    f.i16s(&mut state.imu.accel);
+    f.i16s(&mut state.imu.gyro);
 }
 
 struct Writer(Vec<u8>);
@@ -264,8 +277,16 @@ mod tests {
         let mut state = State::from_button_bits(0x8005_0401);
         state.axes = [-32768, 32767, 0, -1, 255, 7];
         state.hat = [-1, 1];
-        state.pads = [-5, 6, 32767, -32768];
-        state.pad_pressure = [0, 65535];
+        state.left_pad = Pad {
+            x: -5,
+            y: 6,
+            pressure: 0,
+        };
+        state.right_pad = Pad {
+            x: 32767,
+            y: -32768,
+            pressure: 65535,
+        };
         let p = Packet {
             seq: 0xdead_beef,
             state,
@@ -306,5 +327,50 @@ mod tests {
         assert!(is_newer(0, u32::MAX));
         assert!(!is_newer(5, 5));
         assert!(!is_newer(0, 1));
+    }
+
+    /// The documented wire layout, spelled out byte by byte (built independently
+    /// of the code, with Python's struct module): magic, seq, buttons, 6 axes,
+    /// hat, pad x/y (left then right), pad pressure, accel, gyro, all little-endian.
+    const GOLDEN: &str = "44564332443322115555050018fcd0070300fcff05000600ff016f0022ff4d0144fee803d0070a00ecff1e00d8ff3200c4ff";
+
+    fn golden_packet() -> Packet {
+        let mut state = State::from_button_bits(0x0005_5555);
+        state.axes = [-1000, 2000, 3, -4, 5, 6];
+        state.hat = [-1, 1];
+        state.left_pad = Pad {
+            x: 111,
+            y: -222,
+            pressure: 1000,
+        };
+        state.right_pad = Pad {
+            x: 333,
+            y: -444,
+            pressure: 2000,
+        };
+        state.imu = Imu {
+            accel: [10, -20, 30],
+            gyro: [-40, 50, -60],
+        };
+        Packet {
+            seq: 0x1122_3344,
+            state,
+        }
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn the_wire_bytes_match_the_documented_layout() {
+        assert_eq!(golden_packet().encode(), unhex(GOLDEN));
+    }
+
+    #[test]
+    fn the_documented_bytes_decode_to_the_expected_packet() {
+        assert_eq!(Packet::decode(&unhex(GOLDEN)), Some(golden_packet()));
     }
 }

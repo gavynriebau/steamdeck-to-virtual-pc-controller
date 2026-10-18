@@ -50,6 +50,23 @@ pub mod axis {
 /// Triggers span `0..=TRIGGER_MAX`; sticks span the full `i16` range.
 pub const TRIGGER_MAX: i16 = 255;
 
+/// One trackpad: where a finger is, and how hard it presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Pad {
+    pub x: i16,
+    /// Up is positive.
+    pub y: i16,
+    pub pressure: u16,
+}
+
+/// The motion sensors, in the Deck's own units (about 16384 per g on the
+/// accelerometer; the Steam Controller uses the same).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Imu {
+    pub accel: [i16; 3],
+    pub gyro: [i16; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct State {
     buttons: u32,
@@ -57,12 +74,9 @@ pub struct State {
     pub axes: [i16; 6],
     /// D-pad as -1/0/1 for X (right is +) and Y (down is +).
     pub hat: [i8; 2],
-    /// Left X, left Y, right X, right Y (trackpads, up is positive).
-    pub pads: [i16; 4],
-    /// Left, right trackpad pressure.
-    pub pad_pressure: [u16; 2],
-    pub accel: [i16; 3],
-    pub gyro: [i16; 3],
+    pub left_pad: Pad,
+    pub right_pad: Pad,
+    pub imu: Imu,
 }
 
 impl State {

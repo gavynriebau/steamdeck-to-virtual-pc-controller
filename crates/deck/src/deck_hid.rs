@@ -5,7 +5,7 @@
 //! checked against the real hardware.
 
 use crate::status::{Report, Status};
-use dvc_common::controller::{Button, State, TRIGGER_MAX, axis};
+use dvc_common::controller::{Button, Imu, Pad, State, TRIGGER_MAX, axis};
 use dvc_common::lock;
 use std::collections::HashSet;
 use std::fs::File;
@@ -88,10 +88,20 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
         on(DPAD_DOWN) as i8 - on(DPAD_UP) as i8,
     ];
     let s16 = |off| i16_at(b, off);
-    state.pads = [s16(16), s16(18), s16(20), s16(22)];
-    state.pad_pressure = [u16_at(b, 56), u16_at(b, 58)];
-    state.accel = [s16(24), s16(26), s16(28)];
-    state.gyro = [s16(30), s16(32), s16(34)];
+    state.left_pad = Pad {
+        x: s16(16),
+        y: s16(18),
+        pressure: u16_at(b, 56),
+    };
+    state.right_pad = Pad {
+        x: s16(20),
+        y: s16(22),
+        pressure: u16_at(b, 58),
+    };
+    state.imu = Imu {
+        accel: [s16(24), s16(26), s16(28)],
+        gyro: [s16(30), s16(32), s16(34)],
+    };
     Some(state)
 }
 
@@ -202,7 +212,7 @@ mod tests {
         .unwrap();
         assert!(s.pressed(Button::A) && s.pressed(Button::L4));
         assert!(!s.pressed(Button::B));
-        assert_eq!(s.pads, [0; 4]);
+        assert_eq!((s.left_pad, s.right_pad), (Pad::default(), Pad::default()));
         assert_eq!(s.hat, [-1, -1]);
         assert_eq!(s.axes[0], 1000);
         assert_eq!(s.axes[1], -32767);
@@ -256,10 +266,13 @@ mod tests {
         let s = parse_report(&hex(REAL_IDLE)).unwrap();
         assert_eq!(s.button_bits(), 0, "nothing pressed");
         assert_eq!(s.hat, [0, 0]);
-        assert_eq!(s.pads, [0; 4]);
-        assert_eq!(s.pad_pressure, [0, 0]);
-        assert_eq!(s.accel, [-373, -526, 16273], "about 1 g on Z: lying flat");
-        assert_eq!(s.gyro, [-1, -2, 0]);
+        assert_eq!((s.left_pad, s.right_pad), (Pad::default(), Pad::default()));
+        assert_eq!(
+            s.imu.accel,
+            [-373, -526, 16273],
+            "about 1 g on Z: lying flat"
+        );
+        assert_eq!(s.imu.gyro, [-1, -2, 0]);
         assert_eq!(s.axes[axis::LEFT_TRIGGER], 0);
         assert_eq!(s.axes[axis::RIGHT_TRIGGER], 0);
         // Stick Y is flipped to down-positive: the Deck's raw Y is -1276 / -1508.
