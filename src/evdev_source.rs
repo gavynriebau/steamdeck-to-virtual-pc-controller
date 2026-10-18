@@ -2,6 +2,7 @@
 //! Deck) through evdev. The alternative to reading the Deck hardware directly.
 
 use crate::controller::State;
+use crate::status::{Report, Status};
 use crate::xbox_pad;
 use evdev::EventSummary;
 use evdev::raw_stream::{RawDevice, enumerate};
@@ -59,16 +60,18 @@ fn apply(state: &mut State, ev: evdev::InputEvent) {
 
 /// Start reading in the background and send every changed state to `tx`.
 /// When the device goes away the controller is released and the search resumes.
-pub fn spawn(device: String, tx: Sender<State>) {
+pub fn spawn(device: String, tx: Sender<State>, report: Report) {
     std::thread::spawn(move || {
         loop {
             let Some((path, mut dev)) = find_device(&device) else {
                 eprintln!("no gamepad device found, retrying");
+                report(Status::Controller(false));
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
             };
             eprintln!("reading {} ({})", path.display(), dev.name().unwrap_or("?"));
             eprintln!("controller data from {}", path.display());
+            report(Status::Controller(true));
             let mut state = State::default();
             loop {
                 let events = match dev.fetch_events() {

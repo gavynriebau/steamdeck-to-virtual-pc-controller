@@ -12,6 +12,7 @@ pub mod serve;
 pub mod session;
 pub mod sink;
 pub mod startup;
+pub mod status;
 pub mod steam_controller;
 pub mod uhid;
 pub mod xbox_pad;

@@ -18,5 +18,5 @@ BIN=deck-virtual-controller-client
 scp -q "$ROOT/deploy/add_steam_shortcut.py" "$DECK:/tmp/add_steam_shortcut.py"
 ssh "$DECK" "python3 /tmp/add_steam_shortcut.py --remove"
 ssh "$DECK" 'for p in $(pgrep -f "[d]eck-virtual-controller-client") $(pgrep -f "[d]eck-controller-app"); do kill $p 2>/dev/null; done; true'
-ssh "$DECK" "rm -f ~/.local/bin/$BIN ~/.local/bin/deck-controller-app ~/.local/share/applications/$BIN.desktop"
+ssh "$DECK" "rm -f ~/.local/bin/$BIN ~/.local/bin/deck-controller-app ~/.local/bin/deck_supervisor.py ~/.local/share/applications/$BIN.desktop"
 echo "Left in place: ~/.config/$BIN (your config)"

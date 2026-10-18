@@ -41,6 +41,7 @@ ssh "$DECK" "systemctl --user disable --now $BIN 2>/dev/null; rm -f ~/.config/sy
 ssh "$DECK" 'for p in $(pgrep -f "[d]eck-virtual-controller-client") $(pgrep -f "[d]eck-controller-app"); do kill $p 2>/dev/null; done; true'
 scp -q "$client" "$DECK:.local/bin/$BIN"
 scp -q "$ROOT/deck/$APP.py" "$DECK:.local/bin/$APP"
+scp -q "$ROOT/deck/deck_supervisor.py" "$DECK:.local/bin/deck_supervisor.py"
 scp -q "$ROOT/deploy/$BIN.desktop" "$DECK:.local/share/applications/"
 ssh "$DECK" "chmod +x ~/.local/bin/$BIN ~/.local/bin/$APP"
 

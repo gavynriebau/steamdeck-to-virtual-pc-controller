@@ -6,6 +6,7 @@
 
 use crate::controller::{Button, State, TRIGGER_MAX, axis};
 use crate::lock;
+use crate::status::{Report, Status};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
@@ -136,8 +137,8 @@ pub fn read_states(mut reader: impl Read, mut on_state: impl FnMut(State) -> boo
 /// Start reading the Deck's controller in the background and send every state
 /// to `tx`. The Deck exposes several hidraw nodes and only one emits state
 /// reports, so all are read; nodes that disappear are picked up again when
-/// they come back. Progress is reported on stderr.
-pub fn spawn_reader(tx: Sender<State>) {
+/// they come back. Whether data is arriving goes to `report`; details to stderr.
+pub fn spawn_reader(tx: Sender<State>, report: Report) {
     std::thread::spawn(move || {
         let got_data = Arc::new(AtomicBool::new(false));
         let active: Arc<Mutex<HashSet<PathBuf>>> = Arc::default();
@@ -153,10 +154,12 @@ pub fn spawn_reader(tx: Sender<State>) {
                 };
                 lock(&active).insert(path.clone());
                 let (tx, got_data, active) = (tx.clone(), got_data.clone(), active.clone());
+                let report = report.clone();
                 std::thread::spawn(move || {
                     read_states(file, |state| {
                         if !got_data.swap(true, Ordering::Relaxed) {
                             eprintln!("controller data from {}", path.display());
+                            report(Status::Controller(true));
                         }
                         tx.send(state).is_ok()
                     });
@@ -168,6 +171,7 @@ pub fn spawn_reader(tx: Sender<State>) {
             if !warned && !got_data.load(Ordering::Relaxed) {
                 warned = true;
                 eprintln!("no controller data yet (is the Deck controller available?)");
+                report(Status::Controller(false));
             }
         }
     });
