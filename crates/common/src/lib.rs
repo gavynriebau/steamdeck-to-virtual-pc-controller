@@ -6,6 +6,7 @@ pub mod config;
 pub mod controller;
 pub mod proto;
 pub mod startup;
+pub mod timing;
 pub mod xbox_pad;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};

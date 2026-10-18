@@ -76,7 +76,7 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 | Key | Default | Meaning |
 |---|---|---|
 | `bind_addr` | `0.0.0.0:24800` | UDP address to listen on |
-| `timeout_ms` | `1000` | release all inputs if the Deck is silent this long |
+| `timeout_ms` | `1000` | release all inputs if the Deck is silent this long (at least `200`, so that the Deck's heartbeat can keep up) |
 | `controller_type` | `steam` | `steam` or `xbox` |
 | `name` | `Steam Deck Virtual Controller` | name of the virtual device |
 
@@ -87,7 +87,7 @@ Both programs read a `config.toml` (first found of: `--config <path>`, `./config
 | `server_addr` | none, required | `host:port` of the PC |
 | `source` | `hidraw` | `hidraw` reads the Deck hardware directly (works in Game Mode with any Steam layout); `evdev` reads a Linux gamepad device |
 | `device` | auto | (evdev only) device path or name |
-| `heartbeat_ms` | `100` | resend interval when nothing changes |
+| `heartbeat_ms` | `100` | resend interval when nothing changes (`10` to `500`: the server drops a Deck that is silent for its `timeout_ms`) |
 | `deadzone` | `0` | stick deadzone in raw units (sticks span ±32767) |
 | `stick_noise` | `128` | stick movement smaller than this since the last value sent is jitter and is not sent; `0` sends every change |
 

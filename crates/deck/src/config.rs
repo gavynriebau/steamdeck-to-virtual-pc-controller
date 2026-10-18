@@ -1,8 +1,9 @@
 //! The Deck client's `config.toml`.
 
 use dvc_common::config::Validate;
-use dvc_common::proto;
+use dvc_common::{proto, timing};
 use serde::Deserialize;
+use std::time::Duration;
 
 /// Where Deck input is read from.
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
@@ -37,7 +38,7 @@ impl Default for Config {
             source: Source::Hidraw,
             server_addr: format!("127.0.0.1:{}", proto::DEFAULT_PORT),
             device: String::new(),
-            heartbeat_ms: 100,
+            heartbeat_ms: timing::HEARTBEAT.as_millis() as u64,
             deadzone: 0,
             stick_noise: 128,
         }
@@ -47,8 +48,15 @@ impl Default for Config {
 /// The text in the shipped example that the installer replaces with the PC's address.
 pub const ADDRESS_PLACEHOLDER: &str = "PC_ADDRESS";
 
+impl Config {
+    pub fn heartbeat(&self) -> Duration {
+        Duration::from_millis(self.heartbeat_ms)
+    }
+}
+
 impl Validate for Config {
     fn validate(&self) -> Result<(), String> {
+        timing::check_heartbeat(self.heartbeat())?;
         if self.server_addr.contains(ADDRESS_PLACEHOLDER) {
             return Err(format!(
                 "set server_addr in your config.toml (it still holds the placeholder '{}')",
@@ -158,5 +166,32 @@ mod tests {
             6,
             "an example key with no matching setting: {keys:?}"
         );
+    }
+
+    #[test]
+    fn a_heartbeat_slower_than_the_servers_silence_timeout_is_refused() {
+        let cfg = Config {
+            heartbeat_ms: 2000,
+            ..Config::default()
+        };
+        let e = cfg.validate().unwrap_err();
+        assert!(e.contains("heartbeat_ms") && e.contains("500"), "{e}");
+    }
+
+    #[test]
+    fn heartbeat_limits_are_enforced_at_start_up() {
+        for (ms, ok) in [
+            (5, false),
+            (10, true),
+            (100, true),
+            (500, true),
+            (501, false),
+        ] {
+            let cfg = Config {
+                heartbeat_ms: ms,
+                ..Config::default()
+            };
+            assert_eq!(cfg.validate().is_ok(), ok, "heartbeat_ms = {ms}");
+        }
     }
 }

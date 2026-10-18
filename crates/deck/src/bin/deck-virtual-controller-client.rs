@@ -2,6 +2,7 @@
 //! the PC over UDP.
 
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
+use dvc_common::timing;
 use dvc_deck::config::{Config, Source};
 use dvc_deck::deck_hid::HidrawDiscovery;
 use dvc_deck::evdev_source::EvdevDiscovery;
@@ -11,7 +12,6 @@ use dvc_deck::source::{self, Discovery};
 use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
 use std::net::UdpSocket;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 const APP: &str = "deck-virtual-controller-client";
 
@@ -41,7 +41,7 @@ fn main() {
     let imu_wanted = publisher.imu_wanted_flag();
     link::spawn_monitor(
         sock,
-        Duration::from_secs(3),
+        timing::LINK_TIMEOUT,
         {
             let report = report.clone();
             move |reachable| {
@@ -74,10 +74,9 @@ fn main() {
             device: cfg.device.clone(),
         }),
     };
-    source::spawn(discovery, tx, report, Duration::from_secs(2));
+    source::spawn(discovery, tx, report, timing::SOURCE_POLL);
 
-    let heartbeat = Duration::from_millis(cfg.heartbeat_ms.max(10));
-    match run(&rx, &mut publisher, heartbeat) {
+    match run(&rx, &mut publisher, cfg.heartbeat()) {
         RunEnd::Stopped => {
             // This exit status tells the Deck app to close too.
             eprintln!("stop requested (View + Menu)");

@@ -1,8 +1,9 @@
 //! The PC server's `config.toml`.
 
 use dvc_common::config::Validate;
-use dvc_common::proto;
+use dvc_common::{proto, timing};
 use serde::Deserialize;
+use std::time::Duration;
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -29,14 +30,24 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             bind_addr: format!("0.0.0.0:{}", proto::DEFAULT_PORT),
-            timeout_ms: 1000,
+            timeout_ms: timing::SERVER_SILENCE_TIMEOUT.as_millis() as u64,
             controller_type: ControllerType::Steam,
             name: "Steam Deck Virtual Controller".into(),
         }
     }
 }
 
-impl Validate for Config {}
+impl Config {
+    pub fn silence_timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms)
+    }
+}
+
+impl Validate for Config {
+    fn validate(&self) -> Result<(), String> {
+        timing::check_silence_timeout(self.silence_timeout())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -97,5 +108,15 @@ mod tests {
             4,
             "an example key with no matching setting: {keys:?}"
         );
+    }
+
+    #[test]
+    fn a_timeout_the_default_heartbeat_cannot_meet_is_refused() {
+        let cfg = Config {
+            timeout_ms: 50,
+            ..Config::default()
+        };
+        assert!(cfg.validate().unwrap_err().contains("timeout_ms"));
+        assert!(Config::default().validate().is_ok());
     }
 }

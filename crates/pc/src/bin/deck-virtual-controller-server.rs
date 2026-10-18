@@ -2,6 +2,7 @@
 //! emulated Steam Controller (via /dev/uhid) or an Xbox pad (via /dev/uinput).
 
 use dvc_common::startup::{EXIT_ENV, die, load_config};
+use dvc_common::timing;
 use dvc_pc::config::{Config, ControllerType};
 use dvc_pc::serve::{Acker, Event, serve_once};
 use dvc_pc::session::Session;
@@ -9,7 +10,6 @@ use dvc_pc::sink::Sink;
 use dvc_pc::steam_controller::{DeviceEvent, SteamSink};
 use dvc_pc::xbox_sink::XboxSink;
 use std::net::UdpSocket;
-use std::time::Duration;
 
 const APP: &str = "deck-virtual-controller-server";
 
@@ -48,7 +48,7 @@ fn main() {
     let mut sink = open_sink(&cfg);
     let sock = UdpSocket::bind(&cfg.bind_addr)
         .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot bind {}: {e}", cfg.bind_addr)));
-    sock.set_read_timeout(Some(Duration::from_millis(cfg.timeout_ms.max(50))))
+    sock.set_read_timeout(Some(cfg.silence_timeout()))
         .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot set socket timeout: {e}")));
     eprintln!(
         "listening on {}, virtual device '{}'",
@@ -56,7 +56,7 @@ fn main() {
     );
 
     let mut session = Session::new();
-    let mut acker = Acker::new(Duration::from_millis(250));
+    let mut acker = Acker::new(timing::ACK_INTERVAL);
     loop {
         match serve_once(&sock, &mut session, sink.as_mut(), &mut acker) {
             Event::Connected(from) => eprintln!("client connected: {from}"),
