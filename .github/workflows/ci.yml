@@ -36,6 +36,8 @@ jobs:
         run: scripts/tests/test-deck-ctl.sh
       - name: PC installer tests
         run: scripts/tests/test-install-pc.sh
+      - name: Release packaging tests
+        run: scripts/tests/test-package.sh
       - name: Python syntax
         run: python3 -m py_compile deck/deck-controller-app.py deck/deck_supervisor.py deploy/add_steam_shortcut.py
       - name: Steam shortcut tests

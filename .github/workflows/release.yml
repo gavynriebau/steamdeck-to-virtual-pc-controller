@@ -20,14 +20,7 @@ jobs:
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-musl
       - name: Package
-        run: |
-          name="deck-virtual-controller-${GITHUB_REF_NAME}-x86_64-linux"
-          mkdir -p "dist/$name/bin"
-          cp target/x86_64-unknown-linux-musl/release/deck-virtual-controller-client \
-             target/x86_64-unknown-linux-musl/release/deck-virtual-controller-server "dist/$name/bin/"
-          cp -r deploy deck scripts README.md LICENSE "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+        run: scripts/package.sh "$GITHUB_REF_NAME" --out dist
       - uses: softprops/action-gh-release@v2.2.2
         with:
           files: |

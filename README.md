@@ -145,6 +145,7 @@ python3 -m unittest discover -s deploy/tests               # Steam shortcut file
 python3 -m unittest discover -s deck/tests                 # Deck app supervisor tests
 scripts/tests/test-deck-ctl.sh                             # Deck-side helper script
 scripts/tests/test-install-pc.sh                           # PC installer (fake HOME and systemctl)
+scripts/tests/test-package.sh                              # release tarball layout, installers run from it
 ```
 
 The code is a Cargo workspace split along the Deck / PC seam; each side depends only on `dvc-common`:
