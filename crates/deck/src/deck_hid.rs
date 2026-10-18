@@ -4,17 +4,12 @@
 //! layout. Offsets follow the Deck report layout (as used by SDL) and were
 //! checked against the real hardware.
 
-use crate::status::{Report, Status};
+use crate::source::{Candidate, DeviceReader, Discovery};
 use dvc_common::controller::{Button, Imu, Pad, State, TRIGGER_MAX, axis};
-use dvc_common::lock;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 pub const REPORT_LEN: usize = 64;
 const HEADER: [u8; 4] = [0x01, 0x00, 0x09, 0x40];
@@ -144,47 +139,31 @@ pub fn read_states(mut reader: impl Read, mut on_state: impl FnMut(State) -> boo
     }
 }
 
-/// Start reading the Deck's controller in the background and send every state
-/// to `tx`. The Deck exposes several hidraw nodes and only one emits state
-/// reports, so all are read; nodes that disappear are picked up again when
-/// they come back. Whether data is arriving goes to `report`; details to stderr.
-pub fn spawn_reader(tx: Sender<State>, report: Report) {
-    std::thread::spawn(move || {
-        let got_data = Arc::new(AtomicBool::new(false));
-        let active: Arc<Mutex<HashSet<PathBuf>>> = Arc::default();
-        let mut warned = false;
-        loop {
-            for path in find_nodes() {
-                if lock(&active).contains(&path) {
-                    continue;
-                }
-                let Ok(file) = File::open(&path) else {
-                    eprintln!("cannot open {}", path.display());
-                    continue;
-                };
-                lock(&active).insert(path.clone());
-                let (tx, got_data, active) = (tx.clone(), got_data.clone(), active.clone());
-                let report = report.clone();
-                std::thread::spawn(move || {
-                    read_states(file, |state| {
-                        if !got_data.swap(true, Ordering::Relaxed) {
-                            eprintln!("controller data from {}", path.display());
-                            report(Status::Controller(true));
-                        }
-                        tx.send(state).is_ok()
-                    });
-                    eprintln!("lost {}", path.display());
-                    lock(&active).remove(&path);
-                });
-            }
-            std::thread::sleep(Duration::from_secs(2));
-            if !warned && !got_data.load(Ordering::Relaxed) {
-                warned = true;
-                eprintln!("no controller data yet (is the Deck controller available?)");
-                report(Status::Controller(false));
-            }
-        }
-    });
+/// Reads one hidraw node of the Deck's controller.
+struct HidrawReader(File);
+
+impl DeviceReader for HidrawReader {
+    fn run(&mut self, on_state: &mut dyn FnMut(State) -> bool) {
+        read_states(&mut self.0, on_state);
+    }
+}
+
+/// Discovery of the Deck's hidraw nodes. The Deck exposes several and only one
+/// emits state reports, so all are read.
+pub struct HidrawDiscovery;
+
+impl Discovery for HidrawDiscovery {
+    fn present(&mut self, _active: &HashSet<String>) -> Vec<Candidate> {
+        find_nodes()
+            .into_iter()
+            .map(|path| Candidate {
+                id: path.display().to_string(),
+                open: Box::new(move || {
+                    Ok(Box::new(HidrawReader(File::open(path)?)) as Box<dyn DeviceReader>)
+                }),
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

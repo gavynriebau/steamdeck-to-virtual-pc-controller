@@ -1,14 +1,13 @@
 //! Reads a Linux gamepad (by default Steam Input's virtual Xbox pad on the
 //! Deck) through evdev. The alternative to reading the Deck hardware directly.
 
-use crate::status::{Report, Status};
+use crate::source::{Candidate, DeviceReader, Discovery};
 use dvc_common::controller::State;
 use dvc_common::xbox_pad;
 use evdev::EventSummary;
 use evdev::raw_stream::{RawDevice, enumerate};
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
-use std::time::Duration;
 
 /// Preference order when auto-detecting.
 const PREFERRED: [&str; 2] = ["Microsoft X-Box 360 pad", "Valve Software Steam Controller"];
@@ -58,43 +57,69 @@ fn apply(state: &mut State, ev: evdev::InputEvent) {
     }
 }
 
-/// Start reading in the background and send every changed state to `tx`.
-/// When the device goes away the controller is released and the search resumes.
-pub fn spawn(device: String, tx: Sender<State>, report: Report) {
-    std::thread::spawn(move || {
+/// Reads one open evdev gamepad.
+struct EvdevReader {
+    device: RawDevice,
+    state: State,
+}
+
+impl DeviceReader for EvdevReader {
+    fn run(&mut self, on_state: &mut dyn FnMut(State) -> bool) {
+        // An idle pad sends no events; report the resting state once so the
+        // supervisor knows the device is alive.
+        if !on_state(self.state) {
+            return;
+        }
         loop {
-            let Some((path, mut dev)) = find_device(&device) else {
-                eprintln!("no gamepad device found, retrying");
-                report(Status::Controller(false));
-                std::thread::sleep(Duration::from_secs(2));
-                continue;
-            };
-            eprintln!("reading {} ({})", path.display(), dev.name().unwrap_or("?"));
-            eprintln!("controller data from {}", path.display());
-            report(Status::Controller(true));
-            let mut state = State::default();
-            loop {
-                let events = match dev.fetch_events() {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!("device error: {e}");
-                        break;
-                    }
-                };
-                let before = state;
-                for ev in events {
-                    apply(&mut state, ev);
-                }
-                if state != before && tx.send(state).is_err() {
+            let events = match self.device.fetch_events() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("device error: {e}");
                     return;
                 }
+            };
+            let before = self.state;
+            for ev in events {
+                apply(&mut self.state, ev);
             }
-            if tx.send(State::default()).is_err() {
+            if self.state != before && !on_state(self.state) {
                 return;
             }
-            std::thread::sleep(Duration::from_secs(1));
         }
-    });
+    }
+}
+
+/// Discovery of one evdev gamepad: `device` is a path, a device name, or empty
+/// to auto-detect (Steam Input's virtual Xbox pad first).
+pub struct EvdevDiscovery {
+    pub device: String,
+}
+
+impl Discovery for EvdevDiscovery {
+    fn present(&mut self, active: &HashSet<String>) -> Vec<Candidate> {
+        // One pad is enough; searching opens every input device, so don't while reading one.
+        if !active.is_empty() {
+            return Vec::new();
+        }
+        let Some((path, device)) = find_device(&self.device) else {
+            eprintln!("no gamepad device found, retrying");
+            return Vec::new();
+        };
+        eprintln!(
+            "reading {} ({})",
+            path.display(),
+            device.name().unwrap_or("?")
+        );
+        vec![Candidate {
+            id: path.display().to_string(),
+            open: Box::new(move || {
+                Ok(Box::new(EvdevReader {
+                    device,
+                    state: State::default(),
+                }) as Box<dyn DeviceReader>)
+            }),
+        }]
+    }
 }
 
 #[cfg(test)]

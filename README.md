@@ -151,7 +151,7 @@ The code is a Cargo workspace split along the Deck / PC seam; each side depends 
 | Crate | Contains |
 |---|---|
 | `crates/common` | `controller` (named buttons, controller state), `proto` (wire format, one field table), `xbox_pad` (evdev vocabulary), `config` and `startup` |
-| `crates/deck` | `deck_hid` (Deck hardware reader), `evdev_source`, `publisher` (what becomes a packet), `link` (is the server answering), `status` (the contract with the Deck app); binary `deck-virtual-controller-client` |
+| `crates/deck` | `source` (keeps an input source alive: discovery, retry, status), with adapters `deck_hid` (Deck hardware) and `evdev_source`; `publisher` (what becomes a packet), `link` (is the server answering), `status` (the contract with the Deck app); binary `deck-virtual-controller-client` |
 | `crates/pc` | `session` (who we listen to), `serve` (one receive step), `sink` (+ `xbox_sink`, `steam_controller` over `uhid`); binary `deck-virtual-controller-server` |
 
 `steam_controller`'s tests compare against a report captured from a real controller, and `deck_hid`'s against one

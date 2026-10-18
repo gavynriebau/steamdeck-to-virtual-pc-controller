@@ -5,4 +5,5 @@ pub mod deck_hid;
 pub mod evdev_source;
 pub mod link;
 pub mod publisher;
+pub mod source;
 pub mod status;

@@ -3,9 +3,12 @@
 
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
 use dvc_deck::config::{Config, Source};
+use dvc_deck::deck_hid::HidrawDiscovery;
+use dvc_deck::evdev_source::EvdevDiscovery;
+use dvc_deck::link;
 use dvc_deck::publisher::{Publisher, RunEnd, Tuning, run};
+use dvc_deck::source::{self, Discovery};
 use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
-use dvc_deck::{deck_hid, evdev_source, link};
 use std::net::UdpSocket;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -65,10 +68,13 @@ fn main() {
     );
 
     let (tx, rx) = std::sync::mpsc::channel();
-    match cfg.source {
-        Source::Hidraw => deck_hid::spawn_reader(tx, report),
-        Source::Evdev => evdev_source::spawn(cfg.device.clone(), tx, report),
-    }
+    let discovery: Box<dyn Discovery> = match cfg.source {
+        Source::Hidraw => Box::new(HidrawDiscovery),
+        Source::Evdev => Box::new(EvdevDiscovery {
+            device: cfg.device.clone(),
+        }),
+    };
+    source::spawn(discovery, tx, report, Duration::from_secs(2));
 
     let heartbeat = Duration::from_millis(cfg.heartbeat_ms.max(10));
     match run(&rx, &mut publisher, heartbeat) {
