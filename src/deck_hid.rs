@@ -5,6 +5,15 @@
 //! checked against the real hardware.
 
 use crate::controller::{Button, State, TRIGGER_MAX, axis};
+use crate::lock;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub const REPORT_LEN: usize = 64;
 const HEADER: [u8; 4] = [0x01, 0x00, 0x09, 0x40];
@@ -86,8 +95,13 @@ pub fn parse_report(b: &[u8]) -> Option<State> {
 }
 
 /// hidraw nodes belonging to the Deck's built-in controller.
-pub fn find_nodes() -> Vec<std::path::PathBuf> {
-    let Ok(dir) = std::fs::read_dir("/sys/class/hidraw") else {
+pub fn find_nodes() -> Vec<PathBuf> {
+    find_nodes_in(Path::new("/sys/class/hidraw"), Path::new("/dev"))
+}
+
+/// [`find_nodes`] with the sysfs and device directories given (for tests).
+pub fn find_nodes_in(sys_hidraw: &Path, dev: &Path) -> Vec<PathBuf> {
+    let Ok(dir) = std::fs::read_dir(sys_hidraw) else {
         return Vec::new();
     };
     let mut nodes: Vec<_> = dir
@@ -96,10 +110,67 @@ pub fn find_nodes() -> Vec<std::path::PathBuf> {
             std::fs::read_to_string(e.path().join("device/uevent"))
                 .is_ok_and(|u| u.contains("HID_ID=0003:000028DE:00001205"))
         })
-        .map(|e| std::path::Path::new("/dev").join(e.file_name()))
+        .map(|e| dev.join(e.file_name()))
         .collect();
     nodes.sort();
     nodes
+}
+
+/// Read hidraw reports from `reader` until it ends, passing each state report
+/// to `on_state` (other reports are skipped). Stops early if `on_state`
+/// returns false.
+pub fn read_states(mut reader: impl Read, mut on_state: impl FnMut(State) -> bool) {
+    let mut buf = [0u8; 128];
+    while let Ok(n) = reader.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        if let Some(state) = parse_report(&buf[..n])
+            && !on_state(state)
+        {
+            break;
+        }
+    }
+}
+
+/// Start reading the Deck's controller in the background and send every state
+/// to `tx`. The Deck exposes several hidraw nodes and only one emits state
+/// reports, so all are read; nodes that disappear are picked up again when
+/// they come back. Progress is reported on stderr.
+pub fn spawn_reader(tx: Sender<State>) {
+    std::thread::spawn(move || {
+        let got_data = Arc::new(AtomicBool::new(false));
+        let active: Arc<Mutex<HashSet<PathBuf>>> = Arc::default();
+        let mut warned = false;
+        loop {
+            for path in find_nodes() {
+                if lock(&active).contains(&path) {
+                    continue;
+                }
+                let Ok(file) = File::open(&path) else {
+                    eprintln!("cannot open {}", path.display());
+                    continue;
+                };
+                lock(&active).insert(path.clone());
+                let (tx, got_data, active) = (tx.clone(), got_data.clone(), active.clone());
+                std::thread::spawn(move || {
+                    read_states(file, |state| {
+                        if !got_data.swap(true, Ordering::Relaxed) {
+                            eprintln!("controller data from {}", path.display());
+                        }
+                        tx.send(state).is_ok()
+                    });
+                    eprintln!("lost {}", path.display());
+                    lock(&active).remove(&path);
+                });
+            }
+            std::thread::sleep(Duration::from_secs(2));
+            if !warned && !got_data.load(Ordering::Relaxed) {
+                warned = true;
+                eprintln!("no controller data yet (is the Deck controller available?)");
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -164,5 +235,102 @@ mod tests {
             parse_report(&report(0, 0, i16::MIN, 0)).unwrap().axes[1],
             i16::MAX
         );
+    }
+
+    /// A report captured from a real Deck lying flat with nothing pressed.
+    const REAL_IDLE: &str = include_str!("fixtures/deck_idle_report.hex");
+
+    fn hex(s: &str) -> Vec<u8> {
+        let s = s.trim();
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn real_idle_report_parses_to_a_resting_deck() {
+        let s = parse_report(&hex(REAL_IDLE)).unwrap();
+        assert_eq!(s.button_bits(), 0, "nothing pressed");
+        assert_eq!(s.hat, [0, 0]);
+        assert_eq!(s.pads, [0; 4]);
+        assert_eq!(s.pad_pressure, [0, 0]);
+        assert_eq!(s.accel, [-373, -526, 16273], "about 1 g on Z: lying flat");
+        assert_eq!(s.gyro, [-1, -2, 0]);
+        assert_eq!(s.axes[axis::LEFT_TRIGGER], 0);
+        assert_eq!(s.axes[axis::RIGHT_TRIGGER], 0);
+        // Stick Y is flipped to down-positive: the Deck's raw Y is -1276 / -1508.
+        assert_eq!(s.axes[axis::LEFT_Y], 1276);
+        assert_eq!(s.axes[axis::RIGHT_Y], 1508);
+    }
+
+    #[test]
+    fn real_report_with_view_and_menu_set_is_the_stop_chord() {
+        let mut raw = hex(REAL_IDLE);
+        // View (bit 12) + Menu (bit 14), as a real Deck sends them.
+        raw[8..16].copy_from_slice(&0x5000u64.to_le_bytes());
+        assert!(parse_report(&raw).unwrap().is_stop_chord());
+    }
+
+    /// A reader that returns one chunk per read, like hidraw returns one report.
+    struct Chunks(std::vec::IntoIter<Vec<u8>>);
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.next() {
+                Some(chunk) => {
+                    buf[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    fn chunks(v: Vec<Vec<u8>>) -> Chunks {
+        Chunks(v.into_iter())
+    }
+
+    #[test]
+    fn read_states_yields_state_reports_and_skips_others() {
+        let state = hex(REAL_IDLE);
+        let other = vec![0x01, 0x00, 0x05, 0x01, 1, 2, 3]; // some other report type
+        let mut got = Vec::new();
+        read_states(chunks(vec![other, state.clone(), state]), |s| {
+            got.push(s);
+            true
+        });
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn read_states_stops_when_the_callback_says_so() {
+        let state = hex(REAL_IDLE);
+        let mut count = 0;
+        read_states(chunks(vec![state.clone(), state.clone(), state]), |_| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn find_nodes_picks_only_the_deck_controller() {
+        let root = std::env::temp_dir().join(format!("dvc-hidraw-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (node, id) in [
+            ("hidraw0", "0003:000028DE:00001205"),
+            ("hidraw1", "0003:000028DE:00001205"),
+            ("hidraw2", "0018:00002808:00001015"), // the touchscreen
+        ] {
+            let dir = root.join("sys").join(node).join("device");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("uevent"), format!("DRIVER=x\nHID_ID={id}\n")).unwrap();
+        }
+        let nodes = find_nodes_in(&root.join("sys"), Path::new("/dev"));
+        assert_eq!(
+            nodes,
+            [PathBuf::from("/dev/hidraw0"), PathBuf::from("/dev/hidraw1")]
+        );
+        assert!(find_nodes_in(&root.join("missing"), Path::new("/dev")).is_empty());
     }
 }

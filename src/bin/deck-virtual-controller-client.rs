@@ -182,63 +182,28 @@ fn main() {
 }
 
 fn run_hidraw(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, deadzone: i32) -> ! {
-    use std::io::Read;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let got_data = Arc::new(AtomicBool::new(false));
-    let mut warned = false;
-    let mut started = Vec::new();
-    loop {
-        // The Deck exposes several hidraw nodes; only one emits state reports,
-        // so read them all and ignore the rest.
-        for path in deck_hid::find_nodes() {
-            if started.contains(&path) {
-                continue;
+    let (tx, rx) = std::sync::mpsc::channel();
+    deck_hid::spawn_reader(tx);
+    for mut st in rx {
+        for i in axis::STICKS {
+            if (st.axes[i] as i32).abs() < deadzone {
+                st.axes[i] = 0;
             }
-            let Ok(mut file) = std::fs::File::open(&path) else {
-                eprintln!("cannot open {}", path.display());
-                continue;
-            };
-            let Ok(sock) = sock.try_clone() else { continue };
-            started.push(path.clone());
-            let shared = shared.clone();
-            let got_data = got_data.clone();
-            std::thread::spawn(move || {
-                let mut buf = [0u8; 128];
-                while let Ok(n) = file.read(&mut buf) {
-                    let Some(mut st) = deck_hid::parse_report(&buf[..n]) else {
-                        continue;
-                    };
-                    if !got_data.swap(true, Ordering::Relaxed) {
-                        eprintln!("controller data from {}", path.display());
-                    }
-                    for i in axis::STICKS {
-                        if (st.axes[i] as i32).abs() < deadzone {
-                            st.axes[i] = 0;
-                        }
-                    }
-                    if st.is_stop_chord() {
-                        stop_streaming(&sock, &shared);
-                    }
-                    let changed = {
-                        let mut s = lock(&shared);
-                        let changed = s.state != st;
-                        s.state = st;
-                        changed
-                    };
-                    if changed {
-                        send(&sock, &shared, true);
-                    }
-                }
-                eprintln!("lost {}", path.display());
-            });
         }
-        std::thread::sleep(Duration::from_secs(2));
-        if !warned && !got_data.load(Ordering::Relaxed) {
-            warned = true;
-            eprintln!("no controller data yet (is the Deck controller available?)");
+        if st.is_stop_chord() {
+            stop_streaming(sock, shared);
+        }
+        let changed = {
+            let mut s = lock(shared);
+            let changed = s.state != st;
+            s.state = st;
+            changed
+        };
+        if changed {
+            send(sock, shared, true);
         }
     }
+    die(EXIT_ENV, "the Deck controller readers stopped unexpectedly")
 }
 
 fn run_evdev(sock: &UdpSocket, shared: &Arc<Mutex<Shared>>, cfg: &Config) -> ! {
