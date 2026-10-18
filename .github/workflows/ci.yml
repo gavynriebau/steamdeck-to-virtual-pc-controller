@@ -31,7 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2
       - name: ShellCheck
-        run: shellcheck --severity=warning scripts/*.sh
+        run: shellcheck --severity=warning scripts/*.sh scripts/tests/*.sh deploy/deck-ctl.sh
+      - name: Deck helper script tests
+        run: scripts/tests/test-deck-ctl.sh
       - name: Python syntax
         run: python3 -m py_compile deck/deck-controller-app.py deck/deck_supervisor.py deploy/add_steam_shortcut.py
       - name: Steam shortcut tests
