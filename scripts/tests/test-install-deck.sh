@@ -4,16 +4,13 @@
 # shared connection for the whole run, closed at the end even when a step
 # fails, and the right things sent to the Deck.
 set -uo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_tmp
+tmp=$TMP
 
 tree=$tmp/tree
-mkdir -p "$tree/bin"
-cp -r "$here/scripts" "$here/deploy" "$here/deck" "$tree/"
-printf '#!/bin/sh\necho fake client\n' > "$tree/bin/deck-virtual-controller-client"
-chmod +x "$tree/bin/deck-virtual-controller-client"
+release_tree "$tree"
 
 # Fakes: log "<tool> <args>", keep the config piped to `cat >`, fail on request.
 fakebin=$tmp/fakebin

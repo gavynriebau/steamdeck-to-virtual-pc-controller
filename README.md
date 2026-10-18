@@ -160,7 +160,8 @@ scripts/check.sh rust       # or one group: rust, python, shell
 builds; the Python unit tests; shellcheck and the installer, helper and packaging tests). It runs every step, then
 summarises; a step whose tool is missing (shellcheck, the musl target) is reported as skipped, and CI sets
 `CHECK_STRICT=1` so a skip fails there. New tests are picked up automatically (cargo tests, `unittest` discovery, `scripts/tests/test-*.sh`); a new *kind* of
-check is added to that script and nowhere else.
+check is added to that script and nowhere else. The shell suites build their fake environments (a scratch
+directory, a release-shaped copy of the repo with fake binaries, a recording `systemctl`) from `scripts/tests/lib.sh`.
 
 The code is a Cargo workspace split along the Deck / PC seam; each side depends only on `dvc-common`:
 

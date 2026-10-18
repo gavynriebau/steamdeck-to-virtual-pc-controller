@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Runs deploy/deck-ctl.sh against a throwaway HOME and a fake app process.
 set -euo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+here=$REPO
 ctl="$here/deploy/deck-ctl.sh"
 layout="$here/deploy/deck-layout.env"
 # Fed exactly as the installers do: the layout, then the script, over stdin.
 run() { cat "$layout" "$ctl" | HOME=$home sh -s -- "$@"; }
 home=$(mktemp -d)
 trap 'rm -rf "$home"; kill "${fake_pid:-}" 2>/dev/null || true' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # 1. stop kills a process whose command line names the app, and nothing else.
 bash -c 'exec -a "python3 /x/deck-controller-app" sleep 60' &

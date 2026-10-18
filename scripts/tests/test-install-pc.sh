@@ -2,27 +2,20 @@
 # Runs scripts/install-pc.sh and uninstall-pc.sh against a throwaway HOME, a fake
 # systemctl and a fake /dev/uhid, from a copy of the repo with a fake server binary.
 set -euo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_tmp
+tmp=$TMP
 
-# A tree shaped like an unpacked release: scripts, deploy, and a prebuilt binary.
 tree=$tmp/tree
-mkdir -p "$tree/bin"
-cp -r "$here/scripts" "$here/deploy" "$tree/"
-printf '#!/bin/sh\necho fake server\n' > "$tree/bin/deck-virtual-controller-server"
-chmod +x "$tree/bin/deck-virtual-controller-server"
-
-# systemctl only records how it was called.
-mkdir -p "$tmp/fakebin"
-printf '#!/bin/sh\necho "$@" >> "%s/systemctl.log"\n' "$tmp" > "$tmp/fakebin/systemctl"
-chmod +x "$tmp/fakebin/systemctl"
+release_tree "$tree"
+fakebin=$tmp/fakebin
+fake_systemctl "$fakebin" "$tmp/systemctl.log"
 
 home=$tmp/home
 mkdir -p "$home"
 touch "$tmp/uhid"   # writable, like /dev/uhid once the udev rule is in place
-install_pc() { HOME=$home PATH="$tmp/fakebin:$PATH" UHID_DEVICE=${UHID_DEVICE:-$tmp/uhid} "$tree/scripts/install-pc.sh" "$@" 2>&1; }
+install_pc() { HOME=$home PATH="$fakebin:$PATH" UHID_DEVICE=${UHID_DEVICE:-$tmp/uhid} "$tree/scripts/install-pc.sh" "$@" 2>&1; }
 
 bin=$home/.local/bin/deck-virtual-controller-server
 cfg=$home/.config/deck-virtual-controller-server/config.toml
@@ -69,7 +62,7 @@ if install_pc --bogus >/dev/null; then fail "accepted an unknown argument"; fi
 echo "ok: --help and argument checking"
 
 # 7. Uninstall removes the program and the unit, keeps the config.
-HOME=$home PATH="$tmp/fakebin:$PATH" "$tree/scripts/uninstall-pc.sh" >/dev/null 2>&1
+HOME=$home PATH="$fakebin:$PATH" "$tree/scripts/uninstall-pc.sh" >/dev/null 2>&1
 [ ! -e "$bin" ] || fail "binary not removed"
 [ ! -e "$unit" ] || fail "unit not removed"
 [ -e "$cfg" ] || fail "config was removed"

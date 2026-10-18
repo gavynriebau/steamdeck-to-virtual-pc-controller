@@ -3,10 +3,11 @@
 # status, and how it treats a missing tool. Runs it from a copy of the scripts
 # with stub test suites and fake cargo/rustup/python3, so nothing real is run.
 set -uo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_tmp
+tmp=$TMP
+here=$REPO
 
 # A tree with the real check.sh and stub shell suites (none of them is test-check.sh).
 tree=$tmp/tree

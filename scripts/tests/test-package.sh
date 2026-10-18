@@ -3,16 +3,13 @@
 # not) in it, that every file the installers reference is there, and that the
 # installers actually run from the unpacked tree.
 set -euo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+make_tmp
+tmp=$TMP
+here=$REPO
 
-mkdir -p "$tmp/bins"
-for b in deck-virtual-controller-client deck-virtual-controller-server; do
-    printf '#!/bin/sh\necho fake %s\n' "$b" > "$tmp/bins/$b"
-    chmod +x "$tmp/bins/$b"
-done
+fake_binaries "$tmp/bins"
 
 # 1. Packaging produces the tarball and a checksum that verifies.
 tarball=$("$here/scripts/package.sh" v9.9.9 --bin-dir "$tmp/bins" --out "$tmp/out" --no-version-check)
@@ -64,9 +61,8 @@ done
 echo "ok: installers use the prebuilt binaries"
 
 # 5. The PC installer runs from the unpacked tree.
-mkdir -p "$tmp/fakebin" "$tmp/home"
-printf '#!/bin/sh\necho "$@" >> "%s/systemctl.log"\n' "$tmp" > "$tmp/fakebin/systemctl"
-chmod +x "$tmp/fakebin/systemctl"
+mkdir -p "$tmp/home"
+fake_systemctl "$tmp/fakebin" "$tmp/systemctl.log"
 touch "$tmp/uhid"
 HOME=$tmp/home PATH="$tmp/fakebin:$PATH" UHID_DEVICE=$tmp/uhid "$tree/scripts/install-pc.sh" >/dev/null 2>&1 \
     || fail "install-pc.sh failed from the unpacked tree"
