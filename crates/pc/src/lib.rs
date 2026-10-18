@@ -1,6 +1,7 @@
 //! The PC side: receives the Deck's controller state and presents it as an
 //! emulated Steam Controller or an Xbox pad.
 
+pub mod config;
 pub mod serve;
 pub mod session;
 pub mod sink;

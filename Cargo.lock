@@ -47,6 +47,7 @@ dependencies = [
  "dvc-common",
  "evdev",
  "serde",
+ "toml",
 ]
 
 [[package]]
@@ -56,6 +57,7 @@ dependencies = [
  "dvc-common",
  "evdev",
  "serde",
+ "toml",
 ]
 
 [[package]]

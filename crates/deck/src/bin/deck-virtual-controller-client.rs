@@ -1,65 +1,15 @@
 //! Runs on the Steam Deck: reads the Deck's controller and streams its state to
 //! the PC over UDP.
 
-use dvc_common::config::Validate;
-use dvc_common::proto;
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
+use dvc_deck::config::{Config, Source};
 use dvc_deck::publisher::{Publisher, RunEnd, run};
 use dvc_deck::status::{EXIT_STOPPED_BY_USER, Status, print_to_stdout};
 use dvc_deck::{deck_hid, evdev_source, link};
-use serde::Deserialize;
 use std::net::UdpSocket;
 use std::time::Duration;
 
 const APP: &str = "deck-virtual-controller-client";
-
-/// Where Deck input is read from.
-#[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
-#[serde(rename_all = "lowercase")]
-enum Source {
-    /// The Deck hardware directly (works in Game Mode with any Steam layout).
-    Hidraw,
-    /// A Linux gamepad device.
-    Evdev,
-}
-
-#[derive(Deserialize)]
-#[serde(default)]
-struct Config {
-    source: Source,
-    /// Address of the PC running deck-virtual-controller-server.
-    server_addr: String,
-    /// (evdev source) evdev path (e.g. /dev/input/event10) or device name; auto-detected if empty.
-    device: String,
-    /// Resend interval so the server knows we are alive.
-    heartbeat_ms: u64,
-    /// Stick deadzone, in raw units (axes are -32768..32767).
-    deadzone: i32,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            source: Source::Hidraw,
-            server_addr: format!("127.0.0.1:{}", proto::DEFAULT_PORT),
-            device: String::new(),
-            heartbeat_ms: 100,
-            deadzone: 0,
-        }
-    }
-}
-
-impl Validate for Config {
-    fn validate(&self) -> Result<(), String> {
-        if self.server_addr.contains("PC_ADDRESS") {
-            return Err(format!(
-                "set server_addr in your config.toml (it still holds the placeholder '{}')",
-                self.server_addr
-            ));
-        }
-        Ok(())
-    }
-}
 
 fn main() {
     let cfg: Config = load_config(APP);

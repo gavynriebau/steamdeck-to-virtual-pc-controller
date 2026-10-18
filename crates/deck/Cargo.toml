@@ -10,3 +10,6 @@ license.workspace = true
 dvc-common.workspace = true
 evdev.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

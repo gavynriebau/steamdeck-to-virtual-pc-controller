@@ -1,53 +1,17 @@
 //! Runs on the PC: receives controller state over UDP and presents it as an
 //! emulated Steam Controller (via /dev/uhid) or an Xbox pad (via /dev/uinput).
 
-use dvc_common::config::Validate;
-use dvc_common::proto;
 use dvc_common::startup::{EXIT_ENV, die, load_config};
+use dvc_pc::config::{Config, ControllerType};
 use dvc_pc::serve::{Acker, Event, serve_once};
 use dvc_pc::session::Session;
 use dvc_pc::sink::Sink;
 use dvc_pc::steam_controller::{DeviceEvent, SteamSink};
 use dvc_pc::xbox_sink::XboxSink;
-use serde::Deserialize;
 use std::net::UdpSocket;
 use std::time::Duration;
 
 const APP: &str = "deck-virtual-controller-server";
-
-#[derive(Deserialize)]
-#[serde(default)]
-struct Config {
-    bind_addr: String,
-    /// Release all inputs if nothing is heard from the client for this long.
-    timeout_ms: u64,
-    /// "xbox" (Xbox 360 pad) or "steam" (Valve Steam Controller).
-    controller_type: ControllerType,
-    /// Name of the virtual gamepad.
-    name: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            bind_addr: format!("0.0.0.0:{}", proto::DEFAULT_PORT),
-            timeout_ms: 1000,
-            controller_type: ControllerType::Steam,
-            name: "Steam Deck Virtual Controller".into(),
-        }
-    }
-}
-
-impl Validate for Config {}
-
-#[derive(Deserialize, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
-enum ControllerType {
-    /// uinput Xbox 360 gamepad.
-    Xbox,
-    /// Emulated 2026 Steam Controller (28de:1302) over /dev/uhid: buttons, sticks, trackpads, gyro.
-    Steam,
-}
 
 fn open_sink(cfg: &Config) -> Box<dyn Sink> {
     match cfg.controller_type {
