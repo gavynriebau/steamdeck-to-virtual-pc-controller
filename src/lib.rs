@@ -4,6 +4,7 @@
 pub mod config;
 pub mod deck_hid;
 pub mod proto;
+pub mod startup;
 pub mod uhid;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};

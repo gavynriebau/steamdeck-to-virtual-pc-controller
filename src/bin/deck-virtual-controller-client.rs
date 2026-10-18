@@ -6,15 +6,26 @@ use serde::Deserialize;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use steamdeck_as_pc_controller::{config, deck_hid, lock, proto};
+use steamdeck_as_pc_controller::config::Validate;
+use steamdeck_as_pc_controller::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
+use steamdeck_as_pc_controller::{deck_hid, lock, proto};
 
 const APP: &str = "deck-virtual-controller-client";
+
+/// Where Deck input is read from.
+#[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum Source {
+    /// The Deck hardware directly (works in Game Mode with any Steam layout).
+    Hidraw,
+    /// A Linux gamepad device.
+    Evdev,
+}
 
 #[derive(Deserialize)]
 #[serde(default)]
 struct Config {
-    /// "hidraw" (read the Deck hardware directly) or "evdev" (read a Linux gamepad device).
-    source: String,
+    source: Source,
     /// Address of the PC running deck-virtual-controller-server.
     server_addr: String,
     /// (evdev source) evdev path (e.g. /dev/input/event10) or device name; auto-detected if empty.
@@ -28,12 +39,24 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            source: "hidraw".into(),
+            source: Source::Hidraw,
             server_addr: format!("127.0.0.1:{}", proto::DEFAULT_PORT),
             device: String::new(),
             heartbeat_ms: 100,
             deadzone: 0,
         }
+    }
+}
+
+impl Validate for Config {
+    fn validate(&self) -> Result<(), String> {
+        if self.server_addr.contains("PC_ADDRESS") {
+            return Err(format!(
+                "set server_addr in your config.toml (it still holds the placeholder '{}')",
+                self.server_addr
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -128,28 +151,17 @@ fn apply(state: &mut proto::State, ev: evdev::InputEvent, deadzone: i32) -> bool
     }
 }
 
-/// Print an error and exit with the "bad configuration/environment" status.
-fn fail(msg: &str) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(2);
-}
-
 fn main() {
-    let cfg: Config = config::load(APP).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(2);
-    });
+    let cfg: Config = load_config(APP);
 
-    if cfg.server_addr.contains("PC_ADDRESS") {
-        fail(&format!(
-            "set server_addr in your config.toml (it still holds the placeholder '{}')",
-            cfg.server_addr
-        ));
-    }
     let sock = UdpSocket::bind("0.0.0.0:0")
-        .unwrap_or_else(|e| fail(&format!("cannot create UDP socket: {e}")));
-    sock.connect(&cfg.server_addr)
-        .unwrap_or_else(|e| fail(&format!("bad server_addr '{}': {e}", cfg.server_addr)));
+        .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot create UDP socket: {e}")));
+    sock.connect(&cfg.server_addr).unwrap_or_else(|e| {
+        die(
+            EXIT_CONFIG,
+            &format!("bad server_addr '{}': {e}", cfg.server_addr),
+        )
+    });
     eprintln!("sending to {}", cfg.server_addr);
 
     let shared = Arc::new(Mutex::new(Shared {
@@ -160,7 +172,7 @@ fn main() {
     {
         let sock = sock
             .try_clone()
-            .unwrap_or_else(|e| fail(&format!("cannot clone UDP socket: {e}")));
+            .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot clone UDP socket: {e}")));
         let shared = shared.clone();
         let every = Duration::from_millis(cfg.heartbeat_ms.max(10));
         std::thread::spawn(move || {
@@ -171,10 +183,9 @@ fn main() {
         });
     }
 
-    if cfg.source == "hidraw" {
-        run_hidraw(&sock, &shared, cfg.deadzone);
-    } else {
-        run_evdev(&sock, &shared, &cfg);
+    match cfg.source {
+        Source::Hidraw => run_hidraw(&sock, &shared, cfg.deadzone),
+        Source::Evdev => run_evdev(&sock, &shared, &cfg),
     }
 }
 

@@ -9,7 +9,9 @@ use serde::Deserialize;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use steamdeck_as_pc_controller::{config, lock, proto, uhid};
+use steamdeck_as_pc_controller::config::Validate;
+use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
+use steamdeck_as_pc_controller::{lock, proto, uhid};
 
 const APP: &str = "deck-virtual-controller-server";
 const EV_KEY: u16 = 1;
@@ -37,6 +39,8 @@ impl Default for Config {
         }
     }
 }
+
+impl Validate for Config {}
 
 #[derive(Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -140,8 +144,7 @@ enum Output {
 }
 
 fn fail(msg: &str) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(1);
+    die(EXIT_ENV, msg)
 }
 
 fn open_output(cfg: &Config) -> Output {
@@ -169,10 +172,7 @@ fn open_output(cfg: &Config) -> Output {
 }
 
 fn main() {
-    let cfg: Config = config::load(APP).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(2);
-    });
+    let cfg: Config = load_config(APP);
 
     let mut output = open_output(&cfg);
     let sock = UdpSocket::bind(&cfg.bind_addr)
