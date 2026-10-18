@@ -1,0 +1,23 @@
+# The contract between the Deck client (Rust, crates/deck/src/status.rs) and the
+# Deck app (Python, deck/deck_supervisor.py). Both sides' tests read this file,
+# so changing a line here, or on one side only, fails a test.
+#
+# valid   | <line the client prints on stdout> | <key> | <value>
+# ignored | <line neither side may treat as a status>
+# exit    | <name> | <exit status>
+#
+# Anything else on stdout is ignored; human-readable logs go to stderr.
+valid|status target=192.168.1.20:24800|target|192.168.1.20:24800
+valid|status controller=ok|controller|ok
+valid|status controller=missing|controller|missing
+valid|status server=reachable|server|reachable
+valid|status server=unreachable|server|unreachable
+ignored|
+ignored|sending to 192.168.1.20:24800
+ignored|controller data from /dev/hidraw2
+ignored|status
+ignored|status server
+ignored|status server=
+ignored|status =reachable
+ignored|statusserver=reachable
+exit|stopped-by-user|0

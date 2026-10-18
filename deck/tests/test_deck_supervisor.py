@@ -9,6 +9,39 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import deck_supervisor as ds  # noqa: E402
 
 
+def contract_rows(kind):
+    """Rows of contract/status_contract.txt (shared with the Rust client's tests)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "contract", "status_contract.txt")
+    with open(path) as f:
+        lines = f.read().split("\n")
+    return [l.split("|")[1:] for l in lines if not l.startswith("#") and l.startswith(kind + "|")]
+
+
+class Contract(unittest.TestCase):
+    def test_valid_lines_parse_to_the_documented_key_and_value(self):
+        rows = contract_rows("valid")
+        self.assertGreaterEqual(len(rows), 5)
+        for line, key, value in rows:
+            self.assertEqual(ds.parse_status(line), (key, value), line)
+
+    def test_ignored_lines_are_not_statuses(self):
+        rows = contract_rows("ignored")
+        self.assertTrue(rows)
+        for (line,) in rows:
+            self.assertIsNone(ds.parse_status(line), repr(line))
+
+    def test_exit_status_matches(self):
+        stopped = [r for r in contract_rows("exit") if r[0] == "stopped-by-user"][0]
+        self.assertEqual(int(stopped[1]), ds.EXIT_STOPPED_BY_USER)
+
+    def test_every_documented_value_has_a_screen(self):
+        # The app must show something sensible for each status the contract lists.
+        state = {}
+        for line, key, value in contract_rows("valid"):
+            state[key] = value
+            self.assertTrue(ds.describe(state).headline)
+
+
 class Parse(unittest.TestCase):
     def test_status_lines(self):
         self.assertEqual(ds.parse_status("status server=reachable"), ("server", "reachable"))

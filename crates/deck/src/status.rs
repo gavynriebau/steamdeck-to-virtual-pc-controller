@@ -40,6 +40,17 @@ impl fmt::Display for Status {
 }
 
 impl Status {
+    /// The status as the `(key, value)` pair on its line.
+    pub fn key_value(&self) -> (&'static str, String) {
+        match self {
+            Status::Target(t) => ("target", t.clone()),
+            Status::Controller(true) => ("controller", "ok".into()),
+            Status::Controller(false) => ("controller", "missing".into()),
+            Status::Server(true) => ("server", "reachable".into()),
+            Status::Server(false) => ("server", "unreachable".into()),
+        }
+    }
+
     /// Parse a line the client printed; `None` for anything that isn't a status.
     pub fn parse(line: &str) -> Option<Status> {
         let (key, value) = line.trim().strip_prefix("status ")?.split_once('=')?;
@@ -121,5 +132,74 @@ mod tests {
             "status server=unreachable"
         );
         assert_eq!(EXIT_STOPPED_BY_USER, 0);
+    }
+
+    /// `contract/status_contract.txt` is shared with the Python Deck app's tests.
+    const CONTRACT: &str = include_str!("../../../contract/status_contract.txt");
+
+    fn rows(kind: &str) -> Vec<Vec<&'static str>> {
+        CONTRACT
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.strip_prefix(kind)?.strip_prefix('|'))
+            .map(|rest| rest.split('|').collect())
+            .collect()
+    }
+
+    #[test]
+    fn contract_valid_lines_parse_to_the_documented_key_and_value() {
+        let valid = rows("valid");
+        assert!(valid.len() >= 5, "the fixture lists every status");
+        for row in valid {
+            let status =
+                Status::parse(row[0]).unwrap_or_else(|| panic!("{:?} should parse", row[0]));
+            assert_eq!(
+                status.key_value(),
+                (row[1], row[2].to_string()),
+                "{}",
+                row[0]
+            );
+        }
+    }
+
+    #[test]
+    fn contract_valid_lines_are_exactly_what_the_client_prints() {
+        for row in rows("valid") {
+            let status = Status::parse(row[0]).unwrap();
+            assert_eq!(status.to_string(), row[0]);
+        }
+    }
+
+    #[test]
+    fn contract_ignored_lines_are_not_statuses() {
+        let ignored = rows("ignored");
+        assert!(!ignored.is_empty());
+        for row in ignored {
+            assert_eq!(Status::parse(row[0]), None, "{:?}", row[0]);
+        }
+    }
+
+    #[test]
+    fn every_status_the_client_can_print_is_in_the_contract() {
+        let listed: Vec<&str> = rows("valid").iter().map(|r| r[0]).collect();
+        for s in [
+            Status::Controller(true),
+            Status::Controller(false),
+            Status::Server(true),
+            Status::Server(false),
+        ] {
+            assert!(
+                listed.contains(&s.to_string().as_str()),
+                "{s} missing from the contract"
+            );
+        }
+        assert!(listed.iter().any(|l| l.starts_with("status target=")));
+    }
+
+    #[test]
+    fn contract_exit_status_matches() {
+        let exits = rows("exit");
+        let stopped = exits.iter().find(|r| r[0] == "stopped-by-user").unwrap();
+        assert_eq!(stopped[1].parse::<i32>().unwrap(), EXIT_STOPPED_BY_USER);
     }
 }

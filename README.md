@@ -152,7 +152,7 @@ The code is a Cargo workspace split along the Deck / PC seam; each side depends 
 
 `steam_controller`'s tests compare against a report captured from a real controller, and `deck_hid`'s against one
 captured from a real Deck. The Deck app (`deck/`) talks to the client only through the lines and exit status described
-in `crates/deck/src/status.rs`. Releases are built by GitHub Actions when a `v*` tag is pushed.
+in `crates/deck/src/status.rs`; `contract/status_contract.txt` lists them and both the Rust and Python tests read it. Releases are built by GitHub Actions when a `v*` tag is pushed.
 
 ## License
 
