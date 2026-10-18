@@ -2,7 +2,7 @@
 //! kernel's UHID event layout and nothing about what the device is: callers
 //! supply an [`Identity`] and a [`Handler`] that answers the host's reports.
 
-use dvc_common::lock;
+use dvc_common::{info, lock};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
@@ -129,7 +129,7 @@ impl UhidDevice {
             let mut buf = vec![0u8; EVENT_LEN];
             while reader.read(&mut buf).is_ok() {
                 if get_u32(&buf, 0) == UHID_START {
-                    eprintln!("uhid: device started");
+                    info!("uhid: device started");
                 }
                 if let Some(reply) = respond(&buf, &mut handler) {
                     let _ = lock(&writer).write_all(&reply);

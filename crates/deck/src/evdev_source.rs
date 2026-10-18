@@ -4,6 +4,7 @@
 use crate::source::{Candidate, DeviceReader, Discovery};
 use dvc_common::controller::State;
 use dvc_common::xbox_pad;
+use dvc_common::{info, warn};
 use evdev::EventSummary;
 use evdev::raw_stream::{RawDevice, enumerate};
 use std::collections::HashSet;
@@ -74,7 +75,7 @@ impl DeviceReader for EvdevReader {
             let events = match self.device.fetch_events() {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("device error: {e}");
+                    warn!("device error: {e}");
                     return;
                 }
             };
@@ -102,10 +103,10 @@ impl Discovery for EvdevDiscovery {
             return Vec::new();
         }
         let Some((path, device)) = find_device(&self.device) else {
-            eprintln!("no gamepad device found, retrying");
+            warn!("no gamepad device found, retrying");
             return Vec::new();
         };
-        eprintln!(
+        info!(
             "reading {} ({})",
             path.display(),
             device.name().unwrap_or("?")

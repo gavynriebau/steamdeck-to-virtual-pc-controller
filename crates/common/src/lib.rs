@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod controller;
+pub mod log;
 pub mod proto;
 pub mod startup;
 pub mod timing;

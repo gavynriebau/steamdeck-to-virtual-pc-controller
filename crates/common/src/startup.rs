@@ -11,7 +11,7 @@ pub const EXIT_ENV: i32 = 1;
 
 /// Print `msg` and exit with `code`.
 pub fn die(code: i32, msg: &str) -> ! {
-    eprintln!("{msg}");
+    crate::error!("{msg}");
     std::process::exit(code);
 }
 
@@ -23,8 +23,8 @@ pub fn load_config<T: DeserializeOwned + Default + Validate>(app: &str) -> T {
         .and_then(|l| l.value.validate().map(|()| l))
         .unwrap_or_else(|e| die(EXIT_CONFIG, &e));
     match &loaded.path {
-        Some(p) => eprintln!("using config {}", p.display()),
-        None => eprintln!("no config.toml found, using defaults"),
+        Some(p) => crate::info!("using config {}", p.display()),
+        None => crate::info!("no config.toml found, using defaults"),
     }
     loaded.value
 }

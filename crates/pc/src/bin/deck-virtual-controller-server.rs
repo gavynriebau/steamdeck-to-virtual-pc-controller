@@ -3,6 +3,7 @@
 
 use dvc_common::startup::{EXIT_ENV, die, load_config};
 use dvc_common::timing;
+use dvc_common::{info, warn};
 use dvc_pc::config::{Config, ControllerType};
 use dvc_pc::serve::{Acker, Event, serve_once};
 use dvc_pc::session::Session;
@@ -38,7 +39,7 @@ fn main() {
         .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot bind {}: {e}", cfg.bind_addr)));
     sock.set_read_timeout(Some(cfg.silence_timeout()))
         .unwrap_or_else(|e| die(EXIT_ENV, &format!("cannot set socket timeout: {e}")));
-    eprintln!(
+    info!(
         "listening on {}, virtual device '{}'",
         cfg.bind_addr, cfg.name
     );
@@ -47,16 +48,16 @@ fn main() {
     let mut acker = Acker::new(timing::ACK_INTERVAL);
     loop {
         match serve_once(&sock, &mut session, sink.as_mut(), &mut acker) {
-            Event::Connected(from) => eprintln!("client connected: {from}"),
+            Event::Connected(from) => info!("client connected: {from}"),
             Event::Rejected { from, reason } => {
-                eprintln!("ignoring packets from {from}: {reason}")
+                warn!("ignoring packets from {from}: {reason}")
             }
             Event::TimedOut {
                 was_connected: true,
             } => {
-                eprintln!("client timed out, releasing inputs")
+                info!("client timed out, releasing inputs")
             }
-            Event::RecvError(e) => eprintln!("recv error: {e}"),
+            Event::RecvError(e) => warn!("recv error: {e}"),
             Event::Applied
             | Event::Heartbeat
             | Event::Stale

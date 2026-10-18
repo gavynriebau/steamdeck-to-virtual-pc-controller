@@ -2,7 +2,7 @@
 //! the PC over UDP.
 
 use dvc_common::startup::{EXIT_CONFIG, EXIT_ENV, die, load_config};
-use dvc_common::{proto, timing};
+use dvc_common::{info, proto, timing, warn};
 use dvc_deck::config::{Config, Source};
 use dvc_deck::deck_hid::HidrawDiscovery;
 use dvc_deck::evdev_source::EvdevDiscovery;
@@ -26,7 +26,7 @@ fn main() {
             &format!("bad server_addr '{}': {e}", cfg.server_addr),
         )
     });
-    eprintln!("sending to {}", cfg.server_addr);
+    info!("sending to {}", cfg.server_addr);
     let report = print_to_stdout();
     report(Status::Target(cfg.server_addr.clone()));
 
@@ -46,11 +46,11 @@ fn main() {
             let report = report.clone();
             move |link| {
                 match link {
-                    ServerLink::Reachable => eprintln!("server reachable"),
-                    ServerLink::Unreachable => eprintln!(
-                        "no reply from the server (check server_addr and the PC's firewall)"
-                    ),
-                    ServerLink::Incompatible => eprintln!(
+                    ServerLink::Reachable => info!("server reachable"),
+                    ServerLink::Unreachable => {
+                        warn!("no reply from the server (check server_addr and the PC's firewall)")
+                    }
+                    ServerLink::Incompatible => warn!(
                         "the server speaks a different protocol version (this Deck speaks {}); update the PC server to match",
                         char::from(proto::VERSION)
                     ),
@@ -60,7 +60,7 @@ fn main() {
         },
         move |ack| {
             if imu_wanted.swap(ack.imu_wanted, Ordering::Relaxed) != ack.imu_wanted {
-                eprintln!(
+                info!(
                     "server {} the motion sensors",
                     if ack.imu_wanted {
                         "wants"
@@ -84,7 +84,7 @@ fn main() {
     match run(&rx, &mut publisher, cfg.heartbeat()) {
         RunEnd::Stopped => {
             // This exit status tells the Deck app to close too.
-            eprintln!("stop requested (View + Menu)");
+            info!("stop requested (View + Menu)");
             std::process::exit(EXIT_STOPPED_BY_USER);
         }
         RunEnd::SourcesGone => die(EXIT_ENV, "the controller readers stopped unexpectedly"),

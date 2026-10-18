@@ -6,7 +6,7 @@
 
 use crate::status::{Report, Status};
 use dvc_common::controller::State;
-use dvc_common::lock;
+use dvc_common::{info, lock, warn};
 use std::collections::HashSet;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,7 +72,7 @@ impl Supervisor {
             let mut reader = match (candidate.open)() {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("cannot open {}: {e}", candidate.id);
+                    warn!("cannot open {}: {e}", candidate.id);
                     continue;
                 }
             };
@@ -82,12 +82,12 @@ impl Supervisor {
             std::thread::spawn(move || {
                 reader.run(&mut |state| {
                     if !got_data.swap(true, Ordering::Relaxed) {
-                        eprintln!("controller data from {}", candidate.id);
+                        info!("controller data from {}", candidate.id);
                         report(Status::Controller(true));
                     }
                     tx.send(state).is_ok()
                 });
-                eprintln!("lost {}", candidate.id);
+                warn!("lost {}", candidate.id);
                 let none_left = {
                     let mut active = lock(&active);
                     active.remove(&candidate.id);
@@ -101,7 +101,7 @@ impl Supervisor {
         }
         if self.polls >= 2 && !self.got_data.load(Ordering::Relaxed) && !self.warned {
             self.warned = true;
-            eprintln!("no controller data yet (is the Deck controller available?)");
+            warn!("no controller data yet (is the Deck controller available?)");
             (self.report)(Status::Controller(false));
         }
     }
@@ -351,5 +351,36 @@ mod tests {
         let mut sup = Supervisor::new(Box::new(Spy(seen.clone())), tx, report);
         sup.poll();
         assert_eq!(*lock(&seen), [0]);
+    }
+
+    #[test]
+    fn a_device_that_will_not_open_is_logged_as_a_warning_naming_it() {
+        let world = World::default();
+        world.add("dev0", vec![], 1);
+        let (mut sup, _rx, _log) = supervisor(&world);
+        let ((), lines) = dvc_common::log::capture(|| sup.poll());
+        assert_eq!(
+            lines,
+            [(
+                dvc_common::log::Level::Warn,
+                "cannot open dev0: busy".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn missing_data_is_warned_about_once_in_the_log_as_well_as_reported() {
+        let (mut sup, _rx, _log) = supervisor(&World::default());
+        let ((), lines) = dvc_common::log::capture(|| {
+            sup.poll();
+            sup.poll();
+            sup.poll();
+        });
+        let warnings: Vec<_> = lines
+            .iter()
+            .filter(|(level, _)| *level == dvc_common::log::Level::Warn)
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].1.contains("no controller data yet"));
     }
 }

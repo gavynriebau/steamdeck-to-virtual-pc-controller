@@ -4,7 +4,7 @@
 
 use super::identity::{ATTRIBUTES_REPLY, SERIAL};
 use crate::uhid::Handler;
-use dvc_common::lock;
+use dvc_common::{info, lock};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -64,7 +64,7 @@ impl Handler for Handshake {
             let after = device.imu_enabled();
             drop(device);
             if before != after {
-                eprintln!("host turned the gyro {}", if after { "on" } else { "off" });
+                info!("host turned the gyro {}", if after { "on" } else { "off" });
             }
         }
     }
@@ -187,5 +187,25 @@ mod tests {
         assert!(lock(&device).imu_enabled());
         h.set_report(&[1, 0xAE, 0x15, 0x01]); // not a settings write
         assert!(lock(&device).imu_enabled());
+    }
+
+    #[test]
+    fn the_gyro_being_switched_is_logged_once_per_change() {
+        let mut h = handshake();
+        let ((), lines) = dvc_common::log::capture(|| {
+            h.set_report(&[1, 0x87, 3, 0x30, 0x00, 0x00]); // off
+            h.set_report(&[1, 0x87, 3, 0x30, 0x00, 0x00]); // still off: nothing to say
+            h.set_report(&[1, 0x87, 3, 0x30, 0x18, 0x00]); // on
+        });
+        let messages: Vec<&str> = lines.iter().map(|(_, m)| m.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["host turned the gyro off", "host turned the gyro on"]
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|(level, _)| *level == dvc_common::log::Level::Info)
+        );
     }
 }

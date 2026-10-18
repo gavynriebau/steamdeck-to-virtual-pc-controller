@@ -20,7 +20,7 @@ use crate::sink::Sink;
 use crate::uhid::UhidDevice;
 use device::Handshake;
 use dvc_common::controller::State;
-use dvc_common::lock;
+use dvc_common::{error, lock};
 use report::Streamer;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -77,7 +77,7 @@ fn stream(
             let imu_enabled = lock(&device_state).imu_enabled();
             let report = streamer.tick(Instant::now(), &current, imu_enabled);
             if let Err(e) = device.send_input(&report) {
-                eprintln!("uhid write failed: {e}");
+                error!("uhid write failed: {e}");
                 return;
             }
         }

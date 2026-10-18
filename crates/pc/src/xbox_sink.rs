@@ -2,7 +2,7 @@
 
 use crate::sink::Sink;
 use dvc_common::controller::{self, Button, State};
-use dvc_common::xbox_pad;
+use dvc_common::{error, xbox_pad};
 use evdev::uinput::VirtualDevice;
 use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode, UinputAbsSetup,
@@ -105,7 +105,7 @@ impl Sink for XboxSink {
         }
         match self.device.emit(&events) {
             Ok(()) => self.current = *state,
-            Err(e) => eprintln!("emit failed: {e}"),
+            Err(e) => error!("emit failed: {e}"),
         }
     }
 
