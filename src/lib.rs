@@ -9,6 +9,7 @@ pub mod serve;
 pub mod session;
 pub mod sink;
 pub mod startup;
+pub mod steam_controller;
 pub mod uhid;
 pub mod xbox_pad;
 pub mod xbox_sink;

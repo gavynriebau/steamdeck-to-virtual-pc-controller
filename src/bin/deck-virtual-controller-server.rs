@@ -10,7 +10,7 @@ use steamdeck_as_pc_controller::serve::{Event, serve_once};
 use steamdeck_as_pc_controller::session::Session;
 use steamdeck_as_pc_controller::sink::Sink;
 use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::uhid::SteamSink;
+use steamdeck_as_pc_controller::steam_controller::SteamSink;
 use steamdeck_as_pc_controller::xbox_sink::XboxSink;
 
 const APP: &str = "deck-virtual-controller-server";
