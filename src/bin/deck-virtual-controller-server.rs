@@ -11,8 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use steamdeck_as_pc_controller::config::Validate;
 use steamdeck_as_pc_controller::controller::{self, Button};
+use steamdeck_as_pc_controller::proto::{self, DecodeError};
+use steamdeck_as_pc_controller::session::{Accept, Session};
 use steamdeck_as_pc_controller::startup::{EXIT_ENV, die, load_config};
-use steamdeck_as_pc_controller::{lock, proto, uhid, xbox_pad};
+use steamdeck_as_pc_controller::{lock, uhid, xbox_pad};
 
 const APP: &str = "deck-virtual-controller-server";
 const EV_KEY: u16 = 1;
@@ -165,6 +167,18 @@ fn open_output(cfg: &Config) -> Output {
     }
 }
 
+fn describe(reason: DecodeError) -> String {
+    match reason {
+        DecodeError::NotOurs => "not a deck-virtual-controller packet".into(),
+        DecodeError::Version(v) => format!(
+            "protocol version {} (this server speaks {}); update the Deck client",
+            v as char,
+            proto::MAGIC[3] as char
+        ),
+        DecodeError::Length(n) => format!("wrong packet size ({n} bytes)"),
+    }
+}
+
 fn main() {
     let cfg: Config = load_config(APP);
 
@@ -179,24 +193,24 @@ fn main() {
     );
 
     let mut current = controller::State::default();
-    let mut last_seq: Option<u32> = None;
-    let mut client = None;
+    let mut session = Session::new();
     let mut buf = [0u8; 64];
     loop {
         let next = match sock.recv_from(&mut buf) {
-            Ok((n, from)) => match proto::Packet::decode(&buf[..n]) {
-                Some(p)
-                    if last_seq.is_none_or(|l| proto::is_newer(p.seq, l))
-                        || client != Some(from) =>
-                {
-                    if client != Some(from) {
+            Ok((n, from)) => match session.accept(from, &buf[..n]) {
+                Accept::State { state, new_client } => {
+                    if new_client {
                         eprintln!("client connected: {from}");
-                        client = Some(from);
                     }
-                    last_seq = Some(p.seq);
-                    p.state
+                    state
                 }
-                _ => continue,
+                Accept::Stale => continue,
+                Accept::Rejected { reason, first } => {
+                    if first {
+                        eprintln!("ignoring packets from {from}: {}", describe(reason));
+                    }
+                    continue;
+                }
             },
             Err(e)
                 if matches!(
@@ -204,10 +218,9 @@ fn main() {
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                if client.take().is_some() {
+                if session.on_silence() {
                     eprintln!("client timed out, releasing inputs");
                 }
-                last_seq = None;
                 controller::State::default()
             }
             Err(e) => {

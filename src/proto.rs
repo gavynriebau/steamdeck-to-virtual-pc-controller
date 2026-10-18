@@ -6,6 +6,17 @@ pub const MAGIC: [u8; 4] = *b"DVC2";
 pub const PACKET_LEN: usize = 50;
 pub const DEFAULT_PORT: u16 = 24800;
 
+/// Why a datagram was not accepted as a [`Packet`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeError {
+    /// Not a packet of this protocol at all.
+    NotOurs,
+    /// This protocol, but another version (the ASCII version byte is given).
+    Version(u8),
+    /// Right protocol and version, wrong size.
+    Length(usize),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Packet {
     pub seq: u32,
@@ -34,9 +45,24 @@ impl Packet {
     }
 
     pub fn decode(b: &[u8]) -> Option<Packet> {
-        if b.len() != PACKET_LEN || b[0..4] != MAGIC {
-            return None;
+        Packet::try_decode(b).ok()
+    }
+
+    /// Like [`Packet::decode`], but says why a datagram was refused.
+    pub fn try_decode(b: &[u8]) -> Result<Packet, DecodeError> {
+        if b.len() < 4 || b[0..3] != MAGIC[0..3] {
+            return Err(DecodeError::NotOurs);
         }
+        if b[0..4] != MAGIC {
+            return Err(DecodeError::Version(b[3]));
+        }
+        if b.len() != PACKET_LEN {
+            return Err(DecodeError::Length(b.len()));
+        }
+        Packet::decode_body(b).ok_or(DecodeError::Length(b.len()))
+    }
+
+    fn decode_body(b: &[u8]) -> Option<Packet> {
         let mut r = Reader { b, at: 4 };
         let seq = u32::from_le_bytes(r.take()?);
         let mut st = State::from_button_bits(u32::from_le_bytes(r.take()?));
@@ -110,6 +136,18 @@ mod tests {
             state,
         };
         assert_eq!(Packet::decode(&p.encode()), Some(p));
+    }
+
+    #[test]
+    fn says_why_a_datagram_is_refused() {
+        assert_eq!(Packet::try_decode(b"hello"), Err(DecodeError::NotOurs));
+        assert_eq!(Packet::try_decode(b""), Err(DecodeError::NotOurs));
+        let mut old = [0u8; 24];
+        old[..4].copy_from_slice(b"DVC1");
+        assert_eq!(Packet::try_decode(&old), Err(DecodeError::Version(b'1')));
+        let mut short = [0u8; 10];
+        short[..4].copy_from_slice(&MAGIC);
+        assert_eq!(Packet::try_decode(&short), Err(DecodeError::Length(10)));
     }
 
     #[test]
